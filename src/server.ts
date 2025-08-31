@@ -8,17 +8,17 @@ import { initPersistence, setConversationState, getConversationState, recordAppo
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
-// Env validation
+// Env validation (relaxed to allow server startup without third-party creds)
 const EnvSchema = z.object({
   PORT: z.string().default('3000'),
-  EVOLUTION_BASE_URL: z.string().url(),
-  EVOLUTION_API_KEY: z.string().min(1),
-  EVOLUTION_INSTANCE: z.string().min(1),
-  TRINKS_BASE_URL: z.string().url(),
-  TRINKS_API_KEY: z.string().min(1),
-  TRINKS_ESTABELECIMENTO_ID: z.string().min(1),
-  OPENAI_API_KEY: z.string().min(1),
-  OPENAI_MODEL: z.string().default('gpt-4o-mini'),
+  EVOLUTION_BASE_URL: z.string().url().optional(),
+  EVOLUTION_API_KEY: z.string().min(1).optional(),
+  EVOLUTION_INSTANCE: z.string().min(1).optional(),
+  TRINKS_BASE_URL: z.string().url().optional(),
+  TRINKS_API_KEY: z.string().min(1).optional(),
+  TRINKS_ESTABELECIMENTO_ID: z.string().min(1).optional(),
+  OPENAI_API_KEY: z.string().min(1).optional(),
+  OPENAI_MODEL: z.string().default('gpt-4o-mini').optional(),
 });
 
 const env = EnvSchema.parse(process.env);
@@ -87,6 +87,14 @@ app.post('/webhooks/evolution', async (req, res) => {
 
 // Minimal Evolution sender
 async function sendWhatsappText(number: string, text: string) {
+  if (!env.EVOLUTION_BASE_URL || !env.EVOLUTION_API_KEY || !env.EVOLUTION_INSTANCE) {
+    console.warn('Evolution API não configurada. Pulei envio de mensagem.', {
+      hasBaseUrl: Boolean(env.EVOLUTION_BASE_URL),
+      hasApiKey: Boolean(env.EVOLUTION_API_KEY),
+      hasInstance: Boolean(env.EVOLUTION_INSTANCE),
+    });
+    return;
+  }
   const url = `${env.EVOLUTION_BASE_URL}/message/sendText/${env.EVOLUTION_INSTANCE}`;
   await axios.post(
     url,
