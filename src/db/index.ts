@@ -13,15 +13,25 @@ let pg: PgClient | null = null;
 
 export async function initPersistence(opts: { redisUrl?: string | null; databaseUrl?: string | null }) {
   if (opts.redisUrl) {
-    redis = createRedisClient({ url: opts.redisUrl });
-    redis.on('error', (e: Error) => console.error('Redis error:', e));
-    await redis.connect();
+    try {
+      redis = createRedisClient({ url: opts.redisUrl });
+      redis.on('error', (e: Error) => console.error('Redis error:', e));
+      await redis.connect();
+    } catch (err) {
+      console.error('Falha ao conectar Redis:', err);
+      redis = null;
+    }
   }
 
   if (opts.databaseUrl) {
-    pg = new PgClient({ connectionString: opts.databaseUrl });
-    await pg.connect();
-    await ensureTables();
+    try {
+      pg = new PgClient({ connectionString: opts.databaseUrl });
+      await pg.connect();
+      await ensureTables();
+    } catch (err) {
+      console.error('Falha ao conectar PostgreSQL:', err);
+      pg = null;
+    }
   }
 }
 
