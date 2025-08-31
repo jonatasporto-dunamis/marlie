@@ -2,23 +2,30 @@ import axios from 'axios';
 import { z } from 'zod';
 
 const TrinksEnvSchema = z.object({
-  TRINKS_BASE_URL: z.string().url(),
-  TRINKS_API_KEY: z.string().min(1),
-  TRINKS_ESTABELECIMENTO_ID: z.string().min(1),
+  TRINKS_BASE_URL: z.string().url().optional(),
+  TRINKS_API_KEY: z.string().min(1).optional(),
+  TRINKS_ESTABELECIMENTO_ID: z.string().min(1).optional(),
 });
 
 function getEnv() {
   return TrinksEnvSchema.parse(process.env);
 }
 
+function validateConfigured(env: z.infer<typeof TrinksEnvSchema>) {
+  if (!env.TRINKS_BASE_URL || !env.TRINKS_API_KEY || !env.TRINKS_ESTABELECIMENTO_ID) {
+    throw new Error('Trinks API não configurada corretamente (TRINKS_BASE_URL, TRINKS_API_KEY, TRINKS_ESTABELECIMENTO_ID)');
+  }
+}
+
 function getClient() {
   const env = getEnv();
+  validateConfigured(env);
   const client = axios.create({
-    baseURL: env.TRINKS_BASE_URL.replace(/\/$/, ''),
+    baseURL: env.TRINKS_BASE_URL!.replace(/\/$/, ''),
     headers: {
-      'X-Api-Key': env.TRINKS_API_KEY,
-      'accept': 'application/json',
-      'estabelecimentoId': env.TRINKS_ESTABELECIMENTO_ID,
+      'X-Api-Key': env.TRINKS_API_KEY!,
+      accept: 'application/json',
+      estabelecimentoId: env.TRINKS_ESTABELECIMENTO_ID!,
     },
     timeout: 15000,
   });
