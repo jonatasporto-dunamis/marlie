@@ -14,7 +14,7 @@ let pg: PgClient | null = null;
 export async function initPersistence(opts: { redisUrl?: string | null; databaseUrl?: string | null }) {
   if (opts.redisUrl) {
     redis = createRedisClient({ url: opts.redisUrl });
-    redis.on('error', (e) => console.error('Redis error:', e));
+    redis.on('error', (e: Error) => console.error('Redis error:', e));
     await redis.connect();
   }
 
