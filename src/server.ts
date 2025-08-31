@@ -241,8 +241,6 @@ app.post('/trinks/agendamentos', async (req, res) => {
       databaseUrl: process.env.DATABASE_URL || null,
     });
     console.log('Persistence initialized');
-    
-    // Start server
     app.listen(env.PORT, () => {
       console.log(`Server running on port ${env.PORT}`);
     });
