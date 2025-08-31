@@ -25,6 +25,7 @@ const env = EnvSchema.parse(process.env);
 
 // Basic healthcheck
 app.get('/health', (_req, res) => {
+  console.log('Healthcheck accessed');
   res.json({ status: 'ok', name: 'Marliê API' });
 });
 
@@ -233,11 +234,18 @@ app.post('/trinks/agendamentos', async (req, res) => {
 // Inicializa Postgres/Redis na subida do servidor
 (async () => {
   try {
+    // Init persistence (Redis/Postgres)
+    console.log('Initializing persistence...');
     await initPersistence({
-      redisUrl: process.env.REDIS_URL || undefined,
-      databaseUrl: process.env.DATABASE_URL || undefined,
+      redisUrl: process.env.REDIS_URL || null,
+      databaseUrl: process.env.DATABASE_URL || null,
     });
     console.log('Persistence initialized');
+    
+    // Start server
+    app.listen(env.PORT, () => {
+      console.log(`Server running on port ${env.PORT}`);
+    });
   } catch (e) {
     console.error('Persistence init failed:', (e as any)?.message || e);
   }
