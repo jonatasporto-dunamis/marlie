@@ -95,11 +95,7 @@ async function sendWhatsappText(number: string, text: string) {
   );
 }
 
-// Start server
-const port = Number(env.PORT || 3000);
-app.listen(port, () => {
-  console.log(`Marliê API running on http://localhost:${port}`);
-});
+// Moved to end of file
 
 // Rotas de teste Trinks
 app.get('/trinks/clientes', async (req, res) => {
@@ -256,4 +252,10 @@ app.post('/admin/state/:phone', async (req, res) => {
   } catch (e: any) {
     res.status(500).json({ error: e?.message });
   }
+});
+
+// Start server
+const port = Number(env.PORT || 3000);
+app.listen(port, () => {
+  console.log(`Marliê API running on http://localhost:${port}`);
 });
