@@ -114,6 +114,21 @@ async function ensureTables() {
       created_at TIMESTAMPTZ DEFAULT now(),
       UNIQUE (tenant_id, phone)
     );
+
+    -- Catálogo local de serviços por profissional (0 = genérico/qualquer)
+    CREATE TABLE IF NOT EXISTS servicos_prof (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      servico_id INTEGER NOT NULL,
+      servico_nome TEXT NOT NULL,
+      duracao_min INTEGER NOT NULL,
+      valor NUMERIC NULL,
+      profissional_id INTEGER NOT NULL DEFAULT 0,
+      visivel_cliente BOOLEAN DEFAULT TRUE,
+      ativo BOOLEAN DEFAULT TRUE,
+      last_synced_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (tenant_id, servico_id, profissional_id)
+    );
   `);
   // Adicionar migração para alterar constraints se necessário
   try {
@@ -445,4 +460,71 @@ export async function getAllConversationStates(tenantId: string): Promise<any[]>
     [tenantId]
   );
   return result.rows;
+}
+
+export async function upsertServicosProf(
+  tenantId: string,
+  items: Array<{ servicoId: number; servicoNome: string; duracaoMin: number; valor?: number | null; profissionalId?: number | null; visivelCliente?: boolean | null; ativo?: boolean | null }>
+): Promise<void> {
+  if (!pg || !items || items.length === 0) return;
+  for (const it of items) {
+    const profissionalId = it.profissionalId ?? 0;
+    await pg.query(
+      `INSERT INTO servicos_prof (tenant_id, servico_id, servico_nome, duracao_min, valor, profissional_id, visivel_cliente, ativo, last_synced_at)
+       VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7, TRUE), COALESCE($8, TRUE), now())
+       ON CONFLICT (tenant_id, servico_id, profissional_id)
+       DO UPDATE SET servico_nome = EXCLUDED.servico_nome,
+                     duracao_min = EXCLUDED.duracao_min,
+                     valor = EXCLUDED.valor,
+                     visivel_cliente = EXCLUDED.visivel_cliente,
+                     ativo = EXCLUDED.ativo,
+                     last_synced_at = now()`,
+      [tenantId, it.servicoId, it.servicoNome, it.duracaoMin, it.valor ?? null, profissionalId, it.visivelCliente ?? true, it.ativo ?? true]
+    );
+  }
+}
+
+export async function getServicosSuggestions(
+  tenantId: string,
+  term: string,
+  limit = 5
+): Promise<Array<{ servicoId: number; servicoNome: string; duracaoMin: number; valor: number | null }>> {
+  if (!pg) return [];
+  const like = `%${term.toLowerCase()}%`;
+  const q = await pg.query(
+    `SELECT servico_id as "servicoId",
+            MIN(servico_nome) as "servicoNome",
+            MIN(duracao_min) as "duracaoMin",
+            MIN(valor) as valor
+       FROM servicos_prof
+      WHERE tenant_id = $1
+        AND ativo IS TRUE
+        AND visivel_cliente IS TRUE
+        AND lower(servico_nome) LIKE $2
+      GROUP BY servico_id
+      ORDER BY MIN(valor) NULLS LAST, MIN(servico_nome)
+      LIMIT $3`,
+    [tenantId, like, Math.max(1, Math.min(10, limit))]
+  );
+  return q.rows;
+}
+
+export async function existsServicoInCatalog(
+  tenantId: string,
+  servicoId: number,
+  profissionalId?: number | null
+): Promise<boolean> {
+  if (!pg) return false;
+  if (profissionalId == null) {
+    const r = await pg.query(
+      'SELECT 1 FROM servicos_prof WHERE tenant_id = $1 AND servico_id = $2 AND ativo IS TRUE AND visivel_cliente IS TRUE LIMIT 1',
+      [tenantId, servicoId]
+    );
+    return r.rows.length > 0;
+  }
+  const r = await pg.query(
+    'SELECT 1 FROM servicos_prof WHERE tenant_id = $1 AND servico_id = $2 AND profissional_id = $3 AND ativo IS TRUE AND visivel_cliente IS TRUE LIMIT 1',
+    [tenantId, servicoId, profissionalId]
+  );
+  return r.rows.length > 0;
 }

@@ -83,7 +83,22 @@ async function resolveServiceInfoByName(nameLike: string): Promise<{ id: number;
       'manicure', 'pedicure', 'unha', 'unhas', 'cabelo', 'cabelos', 'barba', 'sobrancelha', 'sobrancelhas',
       'depilação', 'depilacao', 'depilar', 'depil', 'cílios', 'cilios', 'maquiagem', 'make', 'estética', 'estetica'
     ];
-    if (categoriasGenericas.includes(q)) {
+    const isCategoria = categoriasGenericas.includes(q);
+
+    // Primeiro tentar catálogo local para reduzir chamadas externas
+    const { getServicosSuggestions } = await import('../db/index');
+    const localCandidates = await getServicosSuggestions('default', nameLike, 5);
+    if (localCandidates && localCandidates.length > 0) {
+      // Caso o usuário tenha passado termo exato de um serviço local
+      const exact = localCandidates.find(s => s.servicoNome.toLowerCase() === q);
+      const chosen = exact || localCandidates[0];
+      if (chosen?.servicoId && chosen?.duracaoMin > 0) {
+        return { id: chosen.servicoId, duracaoEmMinutos: chosen.duracaoMin, valor: Number(chosen.valor ?? 0) };
+      }
+    }
+
+    // Se for claramente categoria e não há match local, evite buscar tudo fora e retorne null
+    if (isCategoria) {
       return null;
     }
 
@@ -249,9 +264,13 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
       }
     }
 
-    // tentar resolver serviço no Trinks
+    // tentar resolver serviço no Trinks ou local
     const info = await resolveServiceInfoByName(serviceName);
+
+    // Se não encontrou, tentar sugerir serviços locais para facilitar escolha
     if (!info) {
+      const { getServicosSuggestions } = await import('../db/index');
+      const sugs = await getServicosSuggestions('default', serviceName, 5);
       const updatedSlots = { ...extracted.slots, awaiting: 'serviceName' };
       await setConversationState('default', number || 'unknown', { 
         slots: updatedSlots,
@@ -260,8 +279,13 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
         etapaAtual: 'aguardando_servico',
         lastText: text
       });
+      if (sugs.length > 0) {
+        const lista = sugs.map((s, i) => `${i + 1}. ${s.servicoNome}`).join('\n');
+        const intro = contactInfo?.firstName ? `${contactInfo.firstName},` : '';
+        return `${intro} não identifiquei exatamente o serviço. Veja algumas opções e me diga o número ou o nome exato:\n\n${lista}`;
+      }
       const greeting = contactInfo?.firstName ? `${contactInfo.firstName},` : '';
-      return `${greeting} entendi que você quer algo em "${serviceName}". "${serviceName}" é uma categoria. Pode me dizer qual serviço específico deseja? Exemplos: "Design de sobrancelhas sem henna", "Virilha completa", "Esmaltação em gel".`;
+      return `${greeting} entendi que você quer algo em "${serviceName}". Pode me dizer qual serviço específico deseja?`;
     }
 
     if (!date) {
@@ -314,6 +338,27 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
     }
 
     try {
+      // Garantir que o serviço existe no catálogo local (economiza e valida)
+      const { existsServicoInCatalog } = await import('../db/index');
+      const existsLocal = await existsServicoInCatalog('default', info.id);
+      if (!existsLocal) {
+        const { getServicosSuggestions } = await import('../db/index');
+        const sugs = await getServicosSuggestions('default', serviceName, 5);
+        const updatedSlots = { ...extracted.slots, awaiting: 'serviceName' };
+        await setConversationState('default', number || 'unknown', { 
+          slots: updatedSlots,
+          messageHistory,
+          contactInfo,
+          etapaAtual: 'aguardando_servico',
+          lastText: text
+        });
+        if (sugs.length > 0) {
+          const lista = sugs.map((s, i) => `${i + 1}. ${s.servicoNome}`).join('\n');
+          return `Antes de prosseguir, preciso que escolha um serviço do nosso catálogo. Algumas opções:\n\n${lista}`;
+        }
+        return 'O serviço informado não está no nosso catálogo. Pode escolher uma opção específica?';
+      }
+
       // Primeiro, verificar se o horário está disponível
       const disponibilidade = await trinks.Trinks.verificarHorarioDisponivel({
         data: date,
@@ -363,7 +408,6 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
           trinksAgendamentoId: undefined,
           status: 'erro',
         });
-        
         const updatedSlots = { ...extracted.slots, nomeServico: serviceName, data: date, hora: time, awaiting: undefined };
         await setConversationState('default', number || 'unknown', { 
           slots: updatedSlots,
@@ -399,14 +443,14 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
       await recordAppointmentAttempt({
         tenantId: 'default',
         phone: clientPhone!,
-        servicoId: info.id,
+        servicoId: info!.id,
         clienteId: null as any,
         dataHoraInicio: iso,
-        duracaoEmMinutos: info.duracaoEmMinutos,
-        valor: info.valor || 0,
+        duracaoEmMinutos: info!.duracaoEmMinutos,
+        valor: info!.valor || 0,
         confirmado: true,
         observacoes: 'Erro ao tentar agendar via WhatsApp',
-        idempotencyKey: `ag:${clientPhone}:${info.id}:${iso}`,
+        idempotencyKey: `ag:${clientPhone}:${info!.id}:${iso}`,
         trinksPayload: { serviceName, info },
         trinksResponse: (e as any)?.response?.data,
         status: 'erro',
