@@ -199,9 +199,25 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
       case 'phone':
         extracted = { intent: 'create_user', name: extracted.name || slots.name, phone: text } as Extracted;
         break;
-      case 'serviceName':
+      case 'serviceName': {
+        // Permitir o usuário digitar o número da sugestão
+        const raw = (text || '').trim();
+        const num = parseInt(raw, 10);
+        const sugestoes = (slots as any)?.serviceSuggestions as Array<{ id: number; nome: string; duracaoMin: number; valor?: number | null }> | undefined;
+        if (Number.isInteger(num) && sugestoes && sugestoes.length > 0) {
+          const idx = num - 1;
+          const chosen = sugestoes[idx];
+          if (chosen) {
+            const newSlots = { ...slots, nomeServico: chosen.nome, servicoSelecionado: chosen, serviceSuggestions: undefined } as any;
+            await setConversationState('default', number || 'unknown', { slots: newSlots });
+            extracted = { intent: 'schedule', serviceName: chosen.nome, date: extracted.date, time: extracted.time } as Extracted;
+            break;
+          }
+        }
+        // Caso contrário, trata como nome livre
         extracted = { intent: 'schedule', serviceName: text, date: extracted.date, time: extracted.time } as Extracted;
         break;
+      }
       case 'date':
         extracted = { intent: 'schedule', serviceName: extracted.serviceName || slots.serviceName, date: text, time: extracted.time } as Extracted;
         break;
@@ -265,13 +281,16 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
     }
 
     // tentar resolver serviço no Trinks ou local
-    const info = await resolveServiceInfoByName(serviceName);
+    // Se já existe um serviço selecionado das sugestões, reutiliza sem nova resolução
+    const preSelected = (extracted.slots as any)?.servicoSelecionado as { id: number; nome: string; duracaoMin: number; valor?: number | null } | undefined;
+    let info = preSelected ? { id: preSelected.id, duracaoEmMinutos: preSelected.duracaoMin, valor: Number(preSelected.valor ?? 0) } : await resolveServiceInfoByName(serviceName);
 
     // Se não encontrou, tentar sugerir serviços locais para facilitar escolha
     if (!info) {
       const { getServicosSuggestions } = await import('../db/index');
       const sugs = await getServicosSuggestions('default', serviceName, 5);
-      const updatedSlots = { ...extracted.slots, awaiting: 'serviceName' };
+      const mapped = sugs.map(s => ({ id: s.servicoId, nome: s.servicoNome, duracaoMin: s.duracaoMin, valor: s.valor ?? null }));
+      const updatedSlots = { ...extracted.slots, awaiting: 'serviceName', serviceSuggestions: mapped } as any;
       await setConversationState('default', number || 'unknown', { 
         slots: updatedSlots,
         messageHistory,
@@ -344,7 +363,8 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
       if (!existsLocal) {
         const { getServicosSuggestions } = await import('../db/index');
         const sugs = await getServicosSuggestions('default', serviceName, 5);
-        const updatedSlots = { ...extracted.slots, awaiting: 'serviceName' };
+        const mapped = sugs.map(s => ({ id: s.servicoId, nome: s.servicoNome, duracaoMin: s.duracaoMin, valor: s.valor ?? null }));
+        const updatedSlots = { ...extracted.slots, awaiting: 'serviceName', serviceSuggestions: mapped } as any;
         await setConversationState('default', number || 'unknown', { 
           slots: updatedSlots,
           messageHistory,
