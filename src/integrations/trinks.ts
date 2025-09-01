@@ -91,7 +91,7 @@ export const Trinks = {
     data: string; // formato aaaa-mm-dd
     servicoId: string | number;
     servicoDuracao: string | number;
-    profissionalId: string | number;
+    profissionalId?: string | number;
   }) {
     const client = getClient();
     const path = `/v1/agendamentos/profissionais/${params.data}`;
@@ -99,7 +99,8 @@ export const Trinks = {
       params: {
         servicoId: params.servicoId,
         servicoDuracao: params.servicoDuracao,
-        profissionalId: params.profissionalId,
+        // Só envia profissionalId se informado
+        ...(params.profissionalId !== undefined ? { profissionalId: params.profissionalId } : {}),
       },
     });
     return res.data;
@@ -113,52 +114,62 @@ export const Trinks = {
     profissionalId?: number;
   }): Promise<{ disponivel: boolean; motivo?: string }> {
     try {
-      const client = getClient();
-      
-      // Buscar agenda do profissional para o dia
+      // Regras de funcionamento: terça (2) a sábado (6), 10h-19h
+      const horaInicio = new Date(`${params.data}T${params.hora}:00`);
+      if (isNaN(horaInicio.getTime())) {
+        return { disponivel: false, motivo: 'Data/horário inválidos' };
+      }
+      const now = new Date();
+      if (horaInicio.getTime() <= now.getTime()) {
+        // Não permitir horários no passado
+        return { disponivel: false, motivo: 'Horário já passou, tente um horário futuro' };
+      }
+      const dow = horaInicio.getDay(); // 0-dom,1-seg,2-ter,3-qua,4-qui,5-sex,6-sab
+      if (dow === 0 || dow === 1) {
+        return { disponivel: false, motivo: 'Atendemos de terça a sábado' };
+      }
+      const hour = parseInt(params.hora.split(':')[0]);
+      if (hour < 10 || hour >= 19) {
+        return { disponivel: false, motivo: 'Horário fora do funcionamento (10h às 19h)' };
+      }
+
+      // Tenta consultar agenda do(s) profissional(is)
       const agenda = await this.buscarAgendaPorProfissional({
         data: params.data,
         servicoId: params.servicoId,
         servicoDuracao: params.duracaoEmMinutos,
-        profissionalId: params.profissionalId || 1 // ID padrão se não especificado
+        profissionalId: params.profissionalId,
       });
-      
-      // Verificar se o horário está disponível
-      const horaInicio = new Date(`${params.data}T${params.hora}:00`);
+
       const horaFim = new Date(horaInicio.getTime() + params.duracaoEmMinutos * 60000);
-      
-      // Verificar conflitos com agendamentos existentes
-      if (agenda && agenda.agendamentos) {
-        for (const agendamento of agenda.agendamentos) {
-          const agendamentoInicio = new Date(agendamento.dataHoraInicio);
-          const agendamentoFim = new Date(agendamentoInicio.getTime() + agendamento.duracaoEmMinutos * 60000);
-          
-          // Verificar sobreposição
-          if (horaInicio < agendamentoFim && horaFim > agendamentoInicio) {
-            return {
-              disponivel: false,
-              motivo: `Horário conflita com agendamento existente às ${agendamentoInicio.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
-            };
+
+      // Se houver lista de agendamentos, validar conflitos
+      const ags = (agenda && (agenda.agendamentos || agenda.data || agenda.slots)) ? (agenda.agendamentos || []) : [];
+      if (Array.isArray(ags) && ags.length > 0) {
+        for (const agendamento of ags) {
+          const agStart = new Date(agendamento.dataHoraInicio || agendamento.inicio || agendamento.start);
+          const agDur = Number(agendamento.duracaoEmMinutos || agendamento.duracao || agendamento.duration || 0);
+          if (!isNaN(agStart.getTime()) && agDur > 0) {
+            const agEnd = new Date(agStart.getTime() + agDur * 60000);
+            if (horaInicio < agEnd && horaFim > agStart) {
+              return {
+                disponivel: false,
+                motivo: `Conflito com agendamento existente às ${agStart.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`,
+              };
+            }
           }
         }
       }
-      
-      // Verificar horário de funcionamento (exemplo: 8h às 18h)
-      const hora24 = parseInt(params.hora.split(':')[0]);
-      if (hora24 < 8 || hora24 >= 18) {
-        return {
-          disponivel: false,
-          motivo: 'Horário fora do funcionamento (8h às 18h)'
-        };
+
+      // Se não conseguimos avaliar (ex.: sem profissionalId e sem dados úteis), seja conservador
+      if (!params.profissionalId && (!agenda || (!ags || ags.length === 0))) {
+        return { disponivel: false, motivo: 'Preciso confirmar a disponibilidade com a profissional. Qual prefere ser atendido(a)?' };
       }
-      
+
       return { disponivel: true };
     } catch (error) {
       console.error('Erro ao verificar horário disponível:', error);
-      return {
-        disponivel: false,
-        motivo: 'Erro ao consultar agenda'
-      };
+      return { disponivel: false, motivo: 'Erro ao consultar agenda' };
     }
   },
 

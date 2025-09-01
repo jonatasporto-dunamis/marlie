@@ -77,10 +77,23 @@ async function ensureTrinksClientByPhone(whatsPhone: string, nameFallback?: stri
 
 async function resolveServiceInfoByName(nameLike: string): Promise<{ id: number; duracaoEmMinutos: number; valor: number } | null> {
   try {
+    const q = (nameLike || '').trim().toLowerCase();
+    // Evitar aceitar categorias genéricas
+    const categoriasGenericas = ['manicure', 'cabelo', 'sobrancelha', 'depilação', 'depilacao', 'cílios', 'cilios', 'maquiagem'];
+    if (categoriasGenericas.includes(q)) {
+      return null;
+    }
     const services = await trinks.Trinks.buscarServicos({ nome: nameLike });
     const list = services?.data || services || [];
-    const first = Array.isArray(list) ? list[0] : null;
-    if (!first) return null;
+    const arr = Array.isArray(list) ? list : [];
+    if (arr.length === 0) return null;
+
+    // Tentativa 1: match exato por nome
+    let found = arr.find((s: any) => String(s.nome || s.nomeservico || '').toLowerCase() === q);
+    // Tentativa 2: match por inclusão
+    if (!found) found = arr.find((s: any) => String(s.nome || s.nomeservico || '').toLowerCase().includes(q));
+
+    const first = found || arr[0];
     const id = Number(first.id ?? first.servicoId ?? first.codigo ?? 0);
     const dur = Number(first.duracaoEmMinutos ?? first.duracao ?? first.duracao_minutos ?? 30);
     const val = Number(first.valor ?? first.preco ?? first.precoAtual ?? 0);
@@ -229,7 +242,8 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
         etapaAtual: 'aguardando_servico',
         lastText: text
       });
-      return 'Não encontrei esse serviço. Poderia informar o nome exatamente como aparece no nosso catálogo?';
+      const greeting = contactInfo?.firstName ? `${contactInfo.firstName},` : '';
+      return `${greeting} entendi que você quer algo em "${serviceName}". "${serviceName}" é uma categoria. Pode me dizer qual serviço específico deseja? Exemplos: "Design de sobrancelhas sem henna", "Virilha completa", "Esmaltação em gel".`;
     }
 
     if (!date) {
@@ -299,7 +313,8 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
           etapaAtual: 'aguardando_horario',
           lastText: text
         });
-        return `Infelizmente esse horário não está disponível. ${disponibilidade.motivo || 'Tente outro horário.'}\n\nQue tal outro horário?`;
+        const motivo = disponibilidade.motivo || 'Horário indisponível';
+        return `${motivo}. Pode sugerir outro horário? Se preferir, posso verificar por profissional específico.`;
       }
 
       const client = await ensureTrinksClientByPhone(clientPhone);
