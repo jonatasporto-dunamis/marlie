@@ -6,29 +6,44 @@ export type ConversationState = {
   lastText?: string;
   slots?: Record<string, any>;
   updatedAt?: string;
+  contactInfo?: { pushName?: string; firstName?: string };
+  messageHistory?: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+    timestamp: string;
+  }>;
 };
 
 let redis: RedisClientType | null = null;
 let pg: PgClient | null = null;
 
 export async function initPersistence(opts: { redisUrl?: string | null; databaseUrl?: string | null; databaseSsl?: boolean | 'no-verify' }) {
+  console.log('Iniciando persistência...');
+  
+  // Desabilitar Redis temporariamente
   if (opts.redisUrl) {
-    try {
-      redis = createRedisClient({ url: opts.redisUrl });
-      redis.on('error', (e: Error) => console.error('Redis error:', e));
-      await redis.connect();
-    } catch (err) {
-      console.error('Falha ao conectar Redis:', err);
-      redis = null;
-    }
+    console.log('Redis URL fornecida, mas Redis está desabilitado temporariamente');
+    // try {
+    //   redis = createRedisClient({ url: opts.redisUrl });
+    //   redis.on('error', (e: Error) => console.error('Redis error:', e));
+    //   await redis.connect();
+    // } catch (err) {
+    //   console.error('Falha ao conectar Redis:', err);
+    //   redis = null;
+    // }
   }
 
   if (opts.databaseUrl) {
     try {
+      console.log('Conectando ao PostgreSQL...');
       const sslConfig = opts.databaseSsl === 'no-verify' ? { rejectUnauthorized: false } : (opts.databaseSsl ? true : undefined);
       pg = new PgClient({ connectionString: opts.databaseUrl, ssl: sslConfig as any });
       await pg.connect();
+      console.log('PostgreSQL conectado com sucesso!');
+      
+      console.log('Criando tabelas...');
       await ensureTables();
+      console.log('Tabelas criadas/verificadas com sucesso!');
     } catch (err) {
       console.error('Falha ao conectar PostgreSQL:', err);
       pg = null;
@@ -48,6 +63,8 @@ async function ensureTables() {
       tenant_id TEXT NOT NULL,
       phone TEXT NOT NULL,
       nome TEXT NULL,
+      primeiro_nome TEXT NULL,
+      push_name TEXT NULL,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now(),
       UNIQUE (tenant_id, phone)
@@ -91,6 +108,13 @@ async function ensureTables() {
   } catch (e) {
     console.error('Migration failed:', e);
   }
+  // Adicionar novos campos se não existirem
+  try {
+    await pg.query('ALTER TABLE contacts ADD COLUMN IF NOT EXISTS primeiro_nome TEXT NULL');
+    await pg.query('ALTER TABLE contacts ADD COLUMN IF NOT EXISTS push_name TEXT NULL');
+  } catch (e) {
+    console.error('Migration for new contact fields failed:', e);
+  }
   try {
     await pg.query('ALTER TABLE conversation_states ALTER COLUMN tenant_id SET NOT NULL');
   } catch (e) {}
@@ -99,11 +123,30 @@ async function ensureTables() {
   } catch (e) {}
 }
 
-export async function getOrCreateContactByPhone(tenantId: string, phone: string, nome?: string): Promise<{ id: number } | null> {
+export async function getOrCreateContactByPhone(
+  tenantId: string, 
+  phone: string, 
+  nome?: string, 
+  contactInfo?: { pushName?: string; firstName?: string }
+): Promise<{ id: number } | null> {
   if (!pg) return null;
   const existing = await pg.query('SELECT id FROM contacts WHERE tenant_id = $1 AND phone = $2', [tenantId, phone]);
-  if (existing.rows[0]) return { id: existing.rows[0].id };
-  const inserted = await pg.query('INSERT INTO contacts (tenant_id, phone, nome) VALUES ($1, $2, $3) RETURNING id', [tenantId, phone, nome || null]);
+  
+  if (existing.rows[0]) {
+    // Atualizar informações do contato se fornecidas
+    if (contactInfo?.pushName || contactInfo?.firstName) {
+      await pg.query(
+        'UPDATE contacts SET push_name = COALESCE($3, push_name), primeiro_nome = COALESCE($4, primeiro_nome), updated_at = now() WHERE tenant_id = $1 AND phone = $2',
+        [tenantId, phone, contactInfo.pushName, contactInfo.firstName]
+      );
+    }
+    return { id: existing.rows[0].id };
+  }
+  
+  const inserted = await pg.query(
+    'INSERT INTO contacts (tenant_id, phone, nome, primeiro_nome, push_name) VALUES ($1, $2, $3, $4, $5) RETURNING id', 
+    [tenantId, phone, nome || null, contactInfo?.firstName || null, contactInfo?.pushName || null]
+  );
   return { id: inserted.rows[0].id };
 }
 
@@ -191,8 +234,39 @@ export async function recordAppointmentAttempt(params: {
 export function getPg() { return pg; }
 export function getRedis() { return redis; }
 
+// Função para limpar histórico de mensagens antigas (mais de 2 horas)
+function cleanOldMessages(messageHistory?: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }>): Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> {
+  if (!messageHistory) return [];
+  
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  return messageHistory.filter(msg => msg.timestamp > twoHoursAgo);
+}
+
+// Função para adicionar mensagem ao histórico
+export function addMessageToHistory(
+  messageHistory: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> = [],
+  role: 'user' | 'assistant',
+  content: string
+): Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> {
+  const cleanHistory = cleanOldMessages(messageHistory);
+  cleanHistory.push({
+    role,
+    content,
+    timestamp: new Date().toISOString()
+  });
+  return cleanHistory;
+}
+
+// Helpers para testes
+export function __setPgForTests(client: any) { pg = client as PgClient; }
+export function __resetPgForTests() { pg = null; }
+
 export async function getAllConversationStates(tenantId: string): Promise<any[]> {
-  const result = await pool.query(
+  const dbPg = getPg();
+  if (!dbPg) {
+    throw new Error('Database not initialized');
+  }
+  const result = await dbPg.query(
     'SELECT phone, state FROM conversation_states WHERE tenant_id = $1',
     [tenantId]
   );

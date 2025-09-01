@@ -1,0 +1,18 @@
+{
+  "key": "test",
+  "data": {
+    "key": "messageUpsert",
+    "message": {
+      "key": {
+        "remoteJid": "5571981533737@s.whatsapp.net",
+        "fromMe": false,
+        "id": "test123"
+      },
+      "message": {
+        "conversation": "Olá, gostaria de agendar um horário"
+      },
+      "messageTimestamp": 1234567890,
+      "pushName": "João Teste"
+    }
+  }
+}
