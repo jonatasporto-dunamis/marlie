@@ -14,10 +14,13 @@
   "description": "",
   "dependencies": {
     "@railway/cli": "^4.6.3",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/pg": "^8.15.5",
     "axios": "^1.11.0",
+    "axios-retry": "^4.5.0",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
     "pg": "^8.16.3",
     "redis": "^5.8.2",
     "zod": "^4.1.5"

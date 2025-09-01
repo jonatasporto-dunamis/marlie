@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { z } from 'zod';
+import axiosRetry from 'axios-retry';
 
 const TrinksEnvSchema = z.object({
   TRINKS_BASE_URL: z.string().url().optional(),
@@ -7,8 +8,18 @@ const TrinksEnvSchema = z.object({
   TRINKS_ESTABELECIMENTO_ID: z.string().min(1).optional(),
 });
 
+function normalizeOptional(v?: string) {
+  const t = (v ?? '').trim();
+  return t.length ? t : undefined;
+}
+
 function getEnv() {
-  return TrinksEnvSchema.parse(process.env);
+  const mapped = {
+    TRINKS_BASE_URL: normalizeOptional(process.env.TRINKS_BASE_URL),
+    TRINKS_API_KEY: normalizeOptional(process.env.TRINKS_API_KEY),
+    TRINKS_ESTABELECIMENTO_ID: normalizeOptional(process.env.TRINKS_ESTABELECIMENTO_ID),
+  };
+  return TrinksEnvSchema.parse(mapped);
 }
 
 function validateConfigured(env: z.infer<typeof TrinksEnvSchema>) {
@@ -21,13 +32,20 @@ function getClient() {
   const env = getEnv();
   validateConfigured(env);
   const client = axios.create({
-    baseURL: env.TRINKS_BASE_URL!.replace(/\/$/, ''),
+    baseURL: env.TRINKS_BASE_URL,
     headers: {
-      'X-Api-Key': env.TRINKS_API_KEY!,
-      accept: 'application/json',
-      estabelecimentoId: env.TRINKS_ESTABELECIMENTO_ID!,
+      'Content-Type': 'application/json',
+      'X-Api-Key': env.TRINKS_API_KEY,
+      'X-Estabelecimento-Id': env.TRINKS_ESTABELECIMENTO_ID,
     },
-    timeout: 15000,
+  });
+  
+  axiosRetry(client, {
+    retries: 3,
+    retryDelay: (retryCount) => retryCount * 1000,
+    retryCondition: (error) => {
+      return axiosRetry.isNetworkOrIdempotentRequestError(error) || error.response?.status === 429;
+    },
   });
   return client;
 }

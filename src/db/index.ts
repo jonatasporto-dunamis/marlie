@@ -11,7 +11,7 @@ export type ConversationState = {
 let redis: RedisClientType | null = null;
 let pg: PgClient | null = null;
 
-export async function initPersistence(opts: { redisUrl?: string | null; databaseUrl?: string | null }) {
+export async function initPersistence(opts: { redisUrl?: string | null; databaseUrl?: string | null; databaseSsl?: boolean | 'no-verify' }) {
   if (opts.redisUrl) {
     try {
       redis = createRedisClient({ url: opts.redisUrl });
@@ -25,7 +25,8 @@ export async function initPersistence(opts: { redisUrl?: string | null; database
 
   if (opts.databaseUrl) {
     try {
-      pg = new PgClient({ connectionString: opts.databaseUrl });
+      const sslConfig = opts.databaseSsl === 'no-verify' ? { rejectUnauthorized: false } : (opts.databaseSsl ? true : undefined);
+      pg = new PgClient({ connectionString: opts.databaseUrl, ssl: sslConfig as any });
       await pg.connect();
       await ensureTables();
     } catch (err) {
@@ -44,16 +45,17 @@ async function ensureTables() {
   await pg.query(`
     CREATE TABLE IF NOT EXISTS contacts (
       id SERIAL PRIMARY KEY,
-      tenant_id TEXT NULL,
-      phone TEXT UNIQUE NOT NULL,
+      tenant_id TEXT NOT NULL,
+      phone TEXT NOT NULL,
       nome TEXT NULL,
       created_at TIMESTAMPTZ DEFAULT now(),
-      updated_at TIMESTAMPTZ DEFAULT now()
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (tenant_id, phone)
     );
 
     CREATE TABLE IF NOT EXISTS conversation_states (
       id SERIAL PRIMARY KEY,
-      tenant_id TEXT NULL,
+      tenant_id TEXT NOT NULL,
       contact_id INTEGER REFERENCES contacts(id) ON DELETE CASCADE,
       etapa_atual TEXT NULL,
       state_json JSONB NULL,
@@ -63,7 +65,7 @@ async function ensureTables() {
 
     CREATE TABLE IF NOT EXISTS appointment_requests (
       id SERIAL PRIMARY KEY,
-      tenant_id TEXT NULL,
+      tenant_id TEXT NOT NULL,
       contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
       servico_id INTEGER NULL,
       profissional_id INTEGER NULL,
@@ -81,35 +83,49 @@ async function ensureTables() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
   `);
+  // Adicionar migração para alterar constraints se necessário
+  try {
+    await pg.query('ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_phone_key');
+    await pg.query('ALTER TABLE contacts ADD CONSTRAINT contacts_tenant_phone_key UNIQUE (tenant_id, phone)');
+    await pg.query('ALTER TABLE contacts ALTER COLUMN tenant_id SET NOT NULL');
+  } catch (e) {
+    console.error('Migration failed:', e);
+  }
+  try {
+    await pg.query('ALTER TABLE conversation_states ALTER COLUMN tenant_id SET NOT NULL');
+  } catch (e) {}
+  try {
+    await pg.query('ALTER TABLE appointment_requests ALTER COLUMN tenant_id SET NOT NULL');
+  } catch (e) {}
 }
 
-export async function getOrCreateContactByPhone(phone: string, nome?: string): Promise<{ id: number } | null> {
+export async function getOrCreateContactByPhone(tenantId: string, phone: string, nome?: string): Promise<{ id: number } | null> {
   if (!pg) return null;
-  const existing = await pg.query('SELECT id FROM contacts WHERE phone = $1', [phone]);
+  const existing = await pg.query('SELECT id FROM contacts WHERE tenant_id = $1 AND phone = $2', [tenantId, phone]);
   if (existing.rows[0]) return { id: existing.rows[0].id };
-  const inserted = await pg.query('INSERT INTO contacts (phone, nome) VALUES ($1, $2) RETURNING id', [phone, nome || null]);
+  const inserted = await pg.query('INSERT INTO contacts (tenant_id, phone, nome) VALUES ($1, $2, $3) RETURNING id', [tenantId, phone, nome || null]);
   return { id: inserted.rows[0].id };
 }
 
 const REDIS_TTL_SECONDS = 60 * 60 * 48; // 48h
 
-export async function setConversationState(phone: string, state: ConversationState, ttlSeconds = REDIS_TTL_SECONDS, tenantId?: string) {
-  const key = `conv:${phone}`;
+export async function setConversationState(tenantId: string, phone: string, state: ConversationState, ttlSeconds = REDIS_TTL_SECONDS) {
+  const key = `conv:${tenantId}:${phone}`;
   const payload = { ...state, updatedAt: nowIso() };
   if (redis) {
     await redis.set(key, JSON.stringify(payload), { EX: ttlSeconds });
   }
   if (pg) {
-    const contact = await getOrCreateContactByPhone(phone);
+    const contact = await getOrCreateContactByPhone(tenantId, phone);
     await pg.query(
       'INSERT INTO conversation_states (tenant_id, contact_id, etapa_atual, state_json, updated_at, expires_at) VALUES ($1,$2,$3,$4,now(),$5)',
-      [tenantId || null, contact?.id || null, state.etapaAtual || null, payload, new Date(Date.now() + ttlSeconds * 1000)]
+      [tenantId, contact?.id || null, state.etapaAtual || null, payload, new Date(Date.now() + ttlSeconds * 1000)]
     );
   }
 }
 
-export async function getConversationState(phone: string): Promise<ConversationState | null> {
-  const key = `conv:${phone}`;
+export async function getConversationState(tenantId: string, phone: string): Promise<ConversationState | null> {
+  const key = `conv:${tenantId}:${phone}`;
   if (redis) {
     const raw = await redis.get(key);
     if (raw) {
@@ -117,15 +133,15 @@ export async function getConversationState(phone: string): Promise<ConversationS
     }
   }
   if (pg) {
-    const q = await pg.query('SELECT state_json FROM conversation_states cs JOIN contacts c ON cs.contact_id = c.id WHERE c.phone = $1 ORDER BY cs.updated_at DESC LIMIT 1', [phone]);
+    const q = await pg.query('SELECT state_json FROM conversation_states cs JOIN contacts c ON cs.contact_id = c.id WHERE cs.tenant_id = $1 AND c.phone = $2 ORDER BY cs.updated_at DESC LIMIT 1', [tenantId, phone]);
     if (q.rows[0]?.state_json) return q.rows[0].state_json as ConversationState;
   }
   return null;
 }
 
 export async function recordAppointmentAttempt(params: {
+  tenantId: string;
   phone?: string;
-  tenantId?: string;
   servicoId?: number;
   profissionalId?: number;
   clienteId?: number;
@@ -143,7 +159,7 @@ export async function recordAppointmentAttempt(params: {
   if (!pg) return;
   let contactId: number | null = null;
   if (params.phone) {
-    const c = await getOrCreateContactByPhone(params.phone);
+    const c = await getOrCreateContactByPhone(params.tenantId, params.phone);
     contactId = c?.id || null;
   }
   await pg.query(
@@ -153,7 +169,7 @@ export async function recordAppointmentAttempt(params: {
     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
     ON CONFLICT (idempotency_key) DO NOTHING`,
     [
-      params.tenantId || null,
+      params.tenantId,
       contactId,
       params.servicoId || null,
       params.profissionalId || null,
@@ -174,3 +190,11 @@ export async function recordAppointmentAttempt(params: {
 
 export function getPg() { return pg; }
 export function getRedis() { return redis; }
+
+export async function getAllConversationStates(tenantId: string): Promise<any[]> {
+  const result = await pool.query(
+    'SELECT phone, state FROM conversation_states WHERE tenant_id = $1',
+    [tenantId]
+  );
+  return result.rows;
+}
