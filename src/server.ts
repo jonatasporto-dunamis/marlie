@@ -88,6 +88,37 @@ async function sendWhatsappText(number: string, text: string) {
   );
 }
 
+// Endpoints administrativos simples
+app.get('/admin', (_req, res) => {
+  res.json({
+    status: 'ok',
+    name: 'Marliê Admin',
+    endpoints: [
+      '/health',
+      '/admin/state/:phone (GET)',
+      '/admin/state/:phone (POST)'
+    ]
+  });
+});
+
+app.get('/admin/state/:phone', async (req, res) => {
+  try {
+    const state = await getConversationState(req.params.phone);
+    res.json({ phone: req.params.phone, state });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
+});
+
+app.post('/admin/state/:phone', async (req, res) => {
+  try {
+    await setConversationState(req.params.phone, req.body || {});
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
+  }
+});
+
 // Rotas de teste Trinks
 app.get('/trinks/clientes', async (req, res) => {
   try {
@@ -238,35 +269,7 @@ app.post('/trinks/agendamentos', async (req, res) => {
   }
 })();
 
-// Endpoints administrativos simples
-app.get('/admin', (_req, res) => {
-  res.json({
-    status: 'ok',
-    name: 'Marliê Admin',
-    endpoints: [
-      '/health',
-      '/admin/state/:phone (GET)',
-      '/admin/state/:phone (POST)'
-    ]
-  });
-});
-app.get('/admin/state/:phone', async (req, res) => {
-  try {
-    const state = await getConversationState(req.params.phone);
-    res.json({ phone: req.params.phone, state });
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message });
-  }
-});
 
-app.post('/admin/state/:phone', async (req, res) => {
-  try {
-    await setConversationState(req.params.phone, req.body || {});
-    res.json({ ok: true });
-  } catch (e: any) {
-    res.status(500).json({ error: e?.message });
-  }
-});
 
 // Util: normalizar número para somente dígitos (DDI+DDD+NÚMERO)
 function normalizeNumber(input?: string): string | null {
