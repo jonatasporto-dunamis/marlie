@@ -105,6 +105,63 @@ export const Trinks = {
     return res.data;
   },
 
+  async verificarHorarioDisponivel(params: {
+    data: string; // formato aaaa-mm-dd
+    hora: string; // formato HH:mm
+    servicoId: number;
+    duracaoEmMinutos: number;
+    profissionalId?: number;
+  }): Promise<{ disponivel: boolean; motivo?: string }> {
+    try {
+      const client = getClient();
+      
+      // Buscar agenda do profissional para o dia
+      const agenda = await this.buscarAgendaPorProfissional({
+        data: params.data,
+        servicoId: params.servicoId,
+        servicoDuracao: params.duracaoEmMinutos,
+        profissionalId: params.profissionalId || 1 // ID padrão se não especificado
+      });
+      
+      // Verificar se o horário está disponível
+      const horaInicio = new Date(`${params.data}T${params.hora}:00`);
+      const horaFim = new Date(horaInicio.getTime() + params.duracaoEmMinutos * 60000);
+      
+      // Verificar conflitos com agendamentos existentes
+      if (agenda && agenda.agendamentos) {
+        for (const agendamento of agenda.agendamentos) {
+          const agendamentoInicio = new Date(agendamento.dataHoraInicio);
+          const agendamentoFim = new Date(agendamentoInicio.getTime() + agendamento.duracaoEmMinutos * 60000);
+          
+          // Verificar sobreposição
+          if (horaInicio < agendamentoFim && horaFim > agendamentoInicio) {
+            return {
+              disponivel: false,
+              motivo: `Horário conflita com agendamento existente às ${agendamentoInicio.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+            };
+          }
+        }
+      }
+      
+      // Verificar horário de funcionamento (exemplo: 8h às 18h)
+      const hora24 = parseInt(params.hora.split(':')[0]);
+      if (hora24 < 8 || hora24 >= 18) {
+        return {
+          disponivel: false,
+          motivo: 'Horário fora do funcionamento (8h às 18h)'
+        };
+      }
+      
+      return { disponivel: true };
+    } catch (error) {
+      console.error('Erro ao verificar horário disponível:', error);
+      return {
+        disponivel: false,
+        motivo: 'Erro ao consultar agenda'
+      };
+    }
+  },
+
   async criarAgendamento(data: {
     servicoId: number;
     clienteId: number;

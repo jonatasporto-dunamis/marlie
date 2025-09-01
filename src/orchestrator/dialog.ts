@@ -282,6 +282,26 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
     }
 
     try {
+      // Primeiro, verificar se o horário está disponível
+      const disponibilidade = await trinks.Trinks.verificarHorarioDisponivel({
+        data: date,
+        hora: time,
+        servicoId: info.id,
+        duracaoEmMinutos: info.duracaoEmMinutos
+      });
+
+      if (!disponibilidade.disponivel) {
+        const updatedSlots = { ...extracted.slots, nomeServico: serviceName, data: date, awaiting: 'time' };
+        await setConversationState('default', number || 'unknown', { 
+          slots: updatedSlots,
+          messageHistory,
+          contactInfo,
+          etapaAtual: 'aguardando_horario',
+          lastText: text
+        });
+        return `Infelizmente esse horário não está disponível. ${disponibilidade.motivo || 'Tente outro horário.'}\n\nQue tal outro horário?`;
+      }
+
       const client = await ensureTrinksClientByPhone(clientPhone);
       const created = await trinks.Trinks.criarAgendamento({
         servicoId: info.id,
@@ -291,6 +311,36 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
         valor: info.valor || 0,
         confirmado: true,
       });
+
+      // Só confirma o agendamento se recebeu um ID válido da API
+      if (!created?.id) {
+        await recordAppointmentAttempt({
+          tenantId: 'default',
+          phone: clientPhone,
+          servicoId: info.id,
+          clienteId: Number(client?.id || client?.clienteId || client?.codigo || 0),
+          dataHoraInicio: iso,
+          duracaoEmMinutos: info.duracaoEmMinutos,
+          valor: info.valor || 0,
+          confirmado: false,
+          observacoes: `Falha ao agendar via WhatsApp - sem ID retornado`,
+          idempotencyKey: `ag:${clientPhone}:${info.id}:${iso}`,
+          trinksPayload: { serviceName, info },
+          trinksResponse: created,
+          trinksAgendamentoId: undefined,
+          status: 'erro',
+        });
+        
+        const updatedSlots = { ...extracted.slots, nomeServico: serviceName, data: date, hora: time, awaiting: undefined };
+        await setConversationState('default', number || 'unknown', { 
+          slots: updatedSlots,
+          messageHistory,
+          contactInfo,
+          etapaAtual: 'erro_agendamento',
+          lastText: text
+        });
+        return 'Ops! Houve um problema ao confirmar seu agendamento. Tente novamente ou entre em contato conosco.';
+      }
 
       await recordAppointmentAttempt({
         tenantId: 'default',
@@ -311,7 +361,7 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
 
       const finalSlots = { ...extracted.slots, nomeServico: serviceName, data: date, hora: time, lastAgendamentoId: created?.id, awaiting: undefined };
       await setConversationState('default', number || 'unknown', { slots: finalSlots });
-      return `Agendamento realizado com sucesso! Serviço: ${serviceName}. Data: ${date} às ${time}. Qualquer dúvida, estou por aqui.`;
+      return `Perfeito! Seu agendamento está confirmado:\n\n*Serviço:* ${serviceName}\n*Data:* ${date}\n*Horário:* ${time}\n*ID:* ${created.id}\n\nTe esperamos! Qualquer dúvida, estou aqui. 😊`;
     } catch (e: any) {
       await recordAppointmentAttempt({
         tenantId: 'default',
