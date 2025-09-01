@@ -99,6 +99,21 @@ async function ensureTables() {
       idempotency_key TEXT UNIQUE NULL,
       created_at TIMESTAMPTZ DEFAULT now()
     );
+
+    CREATE TABLE IF NOT EXISTS client_sessions (
+      id SERIAL PRIMARY KEY,
+      tenant_id TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      trinks_client_id INTEGER NULL,
+      client_name TEXT NULL,
+      client_email TEXT NULL,
+      push_name TEXT NULL,
+      first_name TEXT NULL,
+      session_data JSONB DEFAULT '{}',
+      last_activity TIMESTAMPTZ DEFAULT now(),
+      created_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (tenant_id, phone)
+    );
   `);
   // Adicionar migração para alterar constraints se necessário
   try {
@@ -255,6 +270,165 @@ export function addMessageToHistory(
     timestamp: new Date().toISOString()
   });
   return cleanHistory;
+}
+
+// Função para buscar ou criar sessão do cliente
+export async function getOrCreateClientSession(
+  tenantId: string,
+  phone: string,
+  contactInfo?: { pushName?: string; firstName?: string }
+): Promise<{
+  id: number;
+  trinksClientId?: number;
+  clientName?: string;
+  clientEmail?: string;
+  pushName?: string;
+  firstName?: string;
+  sessionData: any;
+}> {
+  try {
+    if (!pg) {
+      throw new Error('Conexão com banco de dados não disponível');
+    }
+
+    // Buscar sessão existente
+    const existingSession = await pg.query(
+      'SELECT * FROM client_sessions WHERE tenant_id = $1 AND phone = $2',
+      [tenantId, phone]
+    );
+
+    if (existingSession.rows.length > 0) {
+      const session = existingSession.rows[0];
+      
+      // Atualizar informações de contato se fornecidas
+      if (contactInfo?.pushName || contactInfo?.firstName) {
+        await pg.query(
+          'UPDATE client_sessions SET push_name = COALESCE($3, push_name), first_name = COALESCE($4, first_name), last_activity = now() WHERE tenant_id = $1 AND phone = $2',
+          [tenantId, phone, contactInfo?.pushName, contactInfo?.firstName]
+        );
+      }
+      
+      return {
+        id: session.id,
+        trinksClientId: session.trinks_client_id,
+        clientName: session.client_name,
+        clientEmail: session.client_email,
+        pushName: contactInfo?.pushName || session.push_name,
+        firstName: contactInfo?.firstName || session.first_name,
+        sessionData: session.session_data || {}
+      };
+    }
+
+    // Criar nova sessão
+    const newSession = await pg.query(
+      `INSERT INTO client_sessions (tenant_id, phone, push_name, first_name, session_data, last_activity)
+       VALUES ($1, $2, $3, $4, $5, now())
+       RETURNING *`,
+      [tenantId, phone, contactInfo?.pushName, contactInfo?.firstName, '{}']
+    );
+
+    return {
+      id: newSession.rows[0].id,
+      pushName: contactInfo?.pushName,
+      firstName: contactInfo?.firstName,
+      sessionData: {}
+    };
+  } catch (error) {
+    console.error('Erro ao buscar/criar sessão do cliente:', error);
+    return {
+      id: 0,
+      pushName: contactInfo?.pushName,
+      firstName: contactInfo?.firstName,
+      sessionData: {}
+    };
+  }
+}
+
+// Função para atualizar dados da sessão do cliente
+export async function updateClientSession(
+  tenantId: string,
+  phone: string,
+  updates: {
+    trinksClientId?: number;
+    clientName?: string;
+    clientEmail?: string;
+    sessionData?: any;
+  }
+): Promise<void> {
+  try {
+    const setClause = [];
+    const values = [tenantId, phone];
+    let paramIndex = 3;
+
+    if (updates.trinksClientId !== undefined) {
+      setClause.push(`trinks_client_id = $${paramIndex++}`);
+      values.push(updates.trinksClientId.toString());
+    }
+    if (updates.clientName !== undefined) {
+      setClause.push(`client_name = $${paramIndex++}`);
+      values.push(updates.clientName);
+    }
+    if (updates.clientEmail !== undefined) {
+      setClause.push(`client_email = $${paramIndex++}`);
+      values.push(updates.clientEmail);
+    }
+    if (updates.sessionData !== undefined) {
+      setClause.push(`session_data = $${paramIndex++}`);
+      values.push(JSON.stringify(updates.sessionData));
+    }
+
+    if (setClause.length > 0) {
+      setClause.push('last_activity = now()');
+      if (pg) {
+        await pg.query(
+          `UPDATE client_sessions SET ${setClause.join(', ')} WHERE tenant_id = $1 AND phone = $2`,
+          values
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Erro ao atualizar sessão do cliente:', error);
+  }
+}
+
+// Função para buscar cliente no Trinks e atualizar sessão
+export async function searchAndUpdateTrinksClient(
+  tenantId: string,
+  phone: string
+): Promise<{ found: boolean; clientData?: any }> {
+  try {
+    const { Trinks } = await import('../integrations/trinks');
+    
+    // Buscar cliente no Trinks pelo telefone
+    const normalizedPhone = phone.replace(/\D/g, '');
+    const clients = await Trinks.buscarClientes({ telefone: normalizedPhone });
+    
+    const foundClient = clients && clients.length > 0 ? clients[0] : null;
+
+    if (foundClient) {
+      // Atualizar sessão com dados do cliente encontrado
+      await updateClientSession(tenantId, phone, {
+        trinksClientId: foundClient.id || foundClient.clienteId || foundClient.codigo,
+        clientName: foundClient.nome,
+        clientEmail: foundClient.email
+      });
+
+      return {
+        found: true,
+        clientData: {
+          id: foundClient.id || foundClient.clienteId || foundClient.codigo,
+          name: foundClient.nome,
+          email: foundClient.email,
+          phone: foundClient.telefone || foundClient.celular
+        }
+      };
+    }
+
+    return { found: false };
+  } catch (error) {
+    console.error('Erro ao buscar cliente no Trinks:', error);
+    return { found: false };
+  }
 }
 
 // Helpers para testes

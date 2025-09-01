@@ -21,6 +21,8 @@ type Extracted = {
   date?: string; // preferencialmente ISO ou "aaaa-mm-dd"
   time?: string; // preferencialmente HH:mm
   professionalName?: string;
+  // slots persistentes
+  slots?: any;
 };
 
 async function extractIntentAndSlots(text: string): Promise<Extracted> {
@@ -96,7 +98,7 @@ function combineDateTime(date?: string, time?: string): string | null {
   return d.toISOString();
 }
 
-export async function replyForMessage(text: string, phoneNumber?: string, contactInfo?: { pushName?: string; firstName?: string }): Promise<string> {
+export async function replyForMessage(text: string, phoneNumber?: string, contactInfo?: { pushName?: string; firstName?: string; clientSession?: any }): Promise<string> {
   // Tenta um fluxo orquestrado para cadastro/agendamento; se não, responde genericamente
   const number = normalizeNumber(phoneNumber) || undefined;
   const currentState = number ? await getConversationState('default', number) : null;
@@ -105,8 +107,41 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
   // Adicionar mensagem do usuário ao histórico
   const messageHistory = addMessageToHistory(currentState?.messageHistory, 'user', text);
 
+  // Atualizar sessão do cliente com dados da conversa
+  const { updateClientSession } = await import('../db/index');
+  
+  // Recuperar slots persistentes da sessão
+  let persistentSlots = currentState?.slots || {};
+  
+  // Se há slots de agendamento em andamento, manter contexto
+  if (persistentSlots.nomeServico || persistentSlots.data || persistentSlots.hora) {
+    console.log('Contexto de agendamento detectado:', persistentSlots);
+  }
+  
+  const sessionData = {
+    currentStep: currentState?.etapaAtual || 'inicio',
+    slots: persistentSlots,
+    lastMessage: text,
+    messageCount: messageHistory.length,
+    lastActivity: new Date().toISOString()
+  };
+  
+  if (number) {
+    await updateClientSession('default', number, { sessionData });
+  }
+
   // 1) Usa LLM para detectar intenção/slots
   let extracted = await extractIntentAndSlots(text);
+  
+  // Mesclar slots extraídos com slots persistentes
+  extracted.slots = { ...persistentSlots };
+  
+  // Atualizar slots com dados extraídos
+  if (extracted.serviceName) extracted.slots.nomeServico = extracted.serviceName;
+  if (extracted.date) extracted.slots.data = extracted.date;
+  if (extracted.time) extracted.slots.hora = extracted.time;
+  if (extracted.name) extracted.slots.nome = extracted.name;
+  if (extracted.phone) extracted.slots.telefone = extracted.phone;
 
   // 2) Se havia um slot aguardando, prioriza interpretação direta do texto
   const awaiting = slots.awaiting as string | undefined;
@@ -158,27 +193,37 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
   }
 
   if (extracted.intent === 'schedule') {
-    const serviceName = extracted.serviceName || slots.serviceName;
-    const date = extracted.date || slots.date;
-    const time = extracted.time || slots.time;
+    const serviceName = extracted.slots?.nomeServico || extracted.serviceName;
+    const date = extracted.slots?.data || extracted.date;
+    const time = extracted.slots?.hora || extracted.time;
+
+    console.log('Agendamento - Slots atuais:', { serviceName, date, time });
 
     if (!serviceName) {
+      const updatedSlots = { ...extracted.slots, awaiting: 'serviceName' };
       await setConversationState('default', number || 'unknown', { 
-        slots: { ...slots, awaiting: 'serviceName' },
+        slots: updatedSlots,
         messageHistory,
         contactInfo,
         etapaAtual: 'aguardando_servico',
         lastText: text
       });
-      const greeting = contactInfo?.firstName ? `Ótimo, ${contactInfo.firstName}!` : 'Ótimo!';
-      return `${greeting} Qual serviço você deseja agendar?`;
+      
+      // Resposta mais natural sem repetir nome
+      if (messageHistory.length <= 2) {
+        const greeting = contactInfo?.firstName ? `Ótimo, ${contactInfo.firstName}!` : 'Ótimo!';
+        return `${greeting} Qual serviço você deseja agendar?`;
+      } else {
+        return 'Qual serviço você gostaria de agendar?';
+      }
     }
 
     // tentar resolver serviço no Trinks
     const info = await resolveServiceInfoByName(serviceName);
     if (!info) {
+      const updatedSlots = { ...extracted.slots, awaiting: 'serviceName' };
       await setConversationState('default', number || 'unknown', { 
-        slots: { ...slots, awaiting: 'serviceName' },
+        slots: updatedSlots,
         messageHistory,
         contactInfo,
         etapaAtual: 'aguardando_servico',
@@ -188,18 +233,20 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
     }
 
     if (!date) {
+      const updatedSlots = { ...extracted.slots, nomeServico: serviceName, awaiting: 'date' };
       await setConversationState('default', number || 'unknown', { 
-        slots: { ...slots, serviceName, awaiting: 'date' },
+        slots: updatedSlots,
         messageHistory,
         contactInfo,
         etapaAtual: 'aguardando_data',
         lastText: text
       });
-      return 'Perfeito! Para quando você deseja o agendamento? (ex: 2025-09-15)';
+      return `Perfeito! Para qual data você deseja agendar a ${serviceName.toLowerCase()}?`;
     }
     if (!time) {
+      const updatedSlots = { ...extracted.slots, nomeServico: serviceName, data: date, awaiting: 'time' };
       await setConversationState('default', number || 'unknown', { 
-        slots: { ...slots, serviceName, date, awaiting: 'time' },
+        slots: updatedSlots,
         messageHistory,
         contactInfo,
         etapaAtual: 'aguardando_horario',
@@ -210,8 +257,9 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
 
     const iso = combineDateTime(date, time);
     if (!iso) {
+      const updatedSlots = { ...extracted.slots, nomeServico: serviceName, data: date, awaiting: 'time' };
       await setConversationState('default', number || 'unknown', { 
-        slots: { ...slots, serviceName, date, awaiting: 'time' },
+        slots: updatedSlots,
         messageHistory,
         contactInfo,
         etapaAtual: 'aguardando_horario',
@@ -222,8 +270,9 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
 
     const clientPhone = number || normalizeNumber(extracted.phone || '') || undefined;
     if (!clientPhone) {
+      const updatedSlots = { ...extracted.slots, nomeServico: serviceName, data: date, hora: time, awaiting: 'phone' };
       await setConversationState('default', 'unknown', { 
-        slots: { ...slots, serviceName, date, time, awaiting: 'phone' },
+        slots: updatedSlots,
         messageHistory,
         contactInfo,
         etapaAtual: 'aguardando_telefone',
@@ -260,7 +309,8 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
         status: 'sucesso',
       });
 
-      await setConversationState('default', number || 'unknown', { slots: { serviceName, date, time, lastAgendamentoId: created?.id, awaiting: undefined } });
+      const finalSlots = { ...extracted.slots, nomeServico: serviceName, data: date, hora: time, lastAgendamentoId: created?.id, awaiting: undefined };
+      await setConversationState('default', number || 'unknown', { slots: finalSlots });
       return `Agendamento realizado com sucesso! Serviço: ${serviceName}. Data: ${date} às ${time}. Qualquer dúvida, estou por aqui.`;
     } catch (e: any) {
       await recordAppointmentAttempt({
@@ -283,11 +333,38 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
   }
 
   // fallback: resposta genérica com contexto histórico
-  const firstNameInfo = contactInfo?.firstName ? ` O primeiro nome do cliente é ${contactInfo.firstName}, use-o para personalizar a resposta de forma natural.` : '';
+  const clientSession = contactInfo?.clientSession;
+  const isKnownClient = clientSession?.clientName;
+  const firstName = contactInfo?.firstName;
+  
+  let contextInfo = '';
+  if (isKnownClient) {
+    contextInfo = ` O cliente ${clientSession.clientName} já está cadastrado no sistema.`;
+  } else if (firstName) {
+    contextInfo = ` O primeiro nome do cliente é ${firstName}.`;
+  }
+  
   const system: ChatMessage = {
     role: 'system',
-    content:
-      `Você é Marliê, assistente virtual do Ateliê Marcleia Abade. Responda de forma simpática e objetiva mantendo o contexto da conversa. Se a pergunta for sobre horários ou agendamento, peça serviço desejado, data e preferências. Se for cadastro, solicite nome completo e telefone/e-mail. Se não souber, peça para reformular e ofereça falar com um atendente humano.${firstNameInfo}`,
+    content: `Você é Marliê, assistente virtual do Ateliê Marcleia Abade. 
+
+COMUNICAÇÃO:
+- Seja natural, simpática e conversacional
+- EVITE repetir o nome do cliente em toda mensagem
+- Use o nome apenas quando necessário (primeira interação, confirmações importantes)
+- Mantenha o contexto da conversa anterior
+- Seja objetiva mas calorosa
+
+AGENDAMENTO:
+- Para agendamentos: colete serviço, data e horário de forma natural
+- Confirme os detalhes antes de finalizar
+- Se já tiver algumas informações, não peça novamente
+
+CADASTRO:
+- Para novos clientes: solicite nome completo e contato
+- Se não souber algo, peça para reformular ou ofereça atendimento humano
+
+CONTEXTO:${contextInfo}`,
   };
   
   // Construir mensagens com histórico para manter contexto

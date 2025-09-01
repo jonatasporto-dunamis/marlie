@@ -129,28 +129,33 @@ app.post('/webhooks/evolution', async (req, res) => {
     });
 
     if (number && text && isIncomingMessage) {
-      // Salvar/atualizar informações do contato no banco
-      const { getOrCreateContactByPhone } = await import('./db/index');
+      // Buscar ou criar sessão do cliente
+      const { getOrCreateClientSession, searchAndUpdateTrinksClient, getOrCreateContactByPhone } = await import('./db/index');
+      
+      // Criar/atualizar sessão do cliente
+      const clientSession = await getOrCreateClientSession('default', number, { pushName, firstName });
+      
+      // Se é uma nova sessão (sem dados do Trinks), buscar cliente automaticamente
+      if (!clientSession.trinksClientId) {
+        const trinksResult = await searchAndUpdateTrinksClient('default', number);
+        if (trinksResult.found) {
+          console.log(`Cliente encontrado no Trinks: ${trinksResult.clientData?.name}`);
+          clientSession.trinksClientId = trinksResult.clientData?.id;
+          clientSession.clientName = trinksResult.clientData?.name;
+          clientSession.clientEmail = trinksResult.clientData?.email;
+        }
+      }
+      
+      // Manter compatibilidade com sistema antigo
       await getOrCreateContactByPhone('default', number, undefined, { pushName, firstName });
       
-      // salva estado mínimo da conversa com informações do contato
-      await setConversationState('default', number, { 
-        etapaAtual: 'mensagem_recebida', 
-        lastText: text,
-        contactInfo: { pushName, firstName }
-      });
-      
       const { replyForMessage } = await import('./orchestrator/dialog');
-      const answer = await replyForMessage(text, number, { pushName, firstName });
-      await sendWhatsappText(number, answer);
-      
-      // registra resposta
-      await setConversationState('default', number, { 
-        etapaAtual: 'mensagem_respondida', 
-        lastText: text, 
-        contactInfo: { pushName, firstName },
-        slots: { lastAnswer: answer } 
+      const answer = await replyForMessage(text, number, { 
+        pushName: clientSession.pushName, 
+        firstName: clientSession.firstName,
+        clientSession 
       });
+      await sendWhatsappText(number, answer);
     }
 
     res.status(200).json({ received: true });
