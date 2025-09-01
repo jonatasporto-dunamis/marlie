@@ -244,7 +244,7 @@ app.post('/trinks/agendamentos', async (req, res) => {
   }
 });
 
-// Inicializa Postgres/Redis na subida do servidor
+// Inicializa Postgres/Redis na subida do servidor, mas não bloqueia o startup
 (async () => {
   try {
     // Init persistence (Redis/Postgres)
@@ -260,14 +260,15 @@ app.post('/trinks/agendamentos', async (req, res) => {
       databaseSsl,
     });
     console.log('Persistence initialized');
-    const port = Number(env.PORT || 3000);
-    app.listen(port, () => {
-      console.log(`Server running on port ${port}`);
-    });
   } catch (e) {
     console.error('Persistence init failed:', (e as any)?.message || e);
   }
 })();
+
+const port = Number(env.PORT || 3000);
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
 
 
 
