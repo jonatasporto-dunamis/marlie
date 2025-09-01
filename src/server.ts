@@ -11,14 +11,17 @@ app.use(express.json({ limit: '1mb' }));
 // Env validation (relaxed to allow server startup without third-party creds)
 const EnvSchema = z.object({
   PORT: z.string().default('3000'),
-  EVOLUTION_BASE_URL: z.string().url().optional(),
-  EVOLUTION_API_KEY: z.string().min(1).optional(),
-  EVOLUTION_INSTANCE: z.string().min(1).optional(),
-  TRINKS_BASE_URL: z.string().url().optional(),
-  TRINKS_API_KEY: z.string().min(1).optional(),
-  TRINKS_ESTABELECIMENTO_ID: z.string().min(1).optional(),
-  OPENAI_API_KEY: z.string().min(1).optional(),
+  EVOLUTION_BASE_URL: z.string().optional(),
+  EVOLUTION_API_KEY: z.string().optional(),
+  EVOLUTION_INSTANCE: z.string().optional(),
+  TRINKS_BASE_URL: z.string().optional(),
+  TRINKS_API_KEY: z.string().optional(),
+  TRINKS_ESTABELECIMENTO_ID: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-4o-mini').optional(),
+  DATABASE_URL: z.string().optional(),
+  REDIS_URL: z.string().optional(),
+  DATABASE_SSL: z.string().optional(), // 'true' | 'false' | 'no-verify'
 });
 
 const env = EnvSchema.parse(process.env);
@@ -28,26 +31,6 @@ app.get('/health', (_req, res) => {
   console.log('Healthcheck accessed');
   res.json({ status: 'ok', name: 'Marliê API' });
 });
-
-// Util: normalizar número para somente dígitos (DDI+DDD+NÚMERO)
-function normalizeNumber(input?: string): string | null {
-  if (!input) return null;
-  const jid = input.includes('@') ? input.split('@')[0] : input;
-  const digits = jid.replace(/\D+/g, '');
-  return digits.length ? digits : null;
-}
-
-// Extrator genérico de texto da mensagem
-function extractTextFromMessage(msg: any): string | undefined {
-  return (
-    msg?.conversation ||
-    msg?.extendedTextMessage?.text ||
-    msg?.imageMessage?.caption ||
-    msg?.videoMessage?.caption ||
-    msg?.message?.conversation ||
-    msg?.message?.extendedTextMessage?.text
-  );
-}
 
 // Evolution webhook receiver (incoming WhatsApp messages)
 app.post('/webhooks/evolution', async (req, res) => {
@@ -96,15 +79,14 @@ async function sendWhatsappText(number: string, text: string) {
     });
     return;
   }
-  const url = `${env.EVOLUTION_BASE_URL}/message/sendText/${env.EVOLUTION_INSTANCE}`;
+  const base = String(env.EVOLUTION_BASE_URL).replace(/\/$/, '');
+  const url = `${base}/message/sendText/${env.EVOLUTION_INSTANCE}`;
   await axios.post(
     url,
     { number, text },
     { headers: { apikey: env.EVOLUTION_API_KEY, 'Content-Type': 'application/json; charset=utf-8' } }
   );
 }
-
-// Moved to end of file
 
 // Rotas de teste Trinks
 app.get('/trinks/clientes', async (req, res) => {
@@ -236,13 +218,20 @@ app.post('/trinks/agendamentos', async (req, res) => {
   try {
     // Init persistence (Redis/Postgres)
     console.log('Initializing persistence...');
+
+    // parse SSL mode
+    const sslMode = String(env.DATABASE_SSL || '').trim().toLowerCase();
+    const databaseSsl = sslMode === 'no-verify' ? 'no-verify' : (sslMode === 'true' || sslMode === '1' ? true : undefined);
+
     await initPersistence({
-      redisUrl: process.env.REDIS_URL || null,
-      databaseUrl: process.env.DATABASE_URL || null,
+      redisUrl: env.REDIS_URL || null,
+      databaseUrl: env.DATABASE_URL || null,
+      databaseSsl,
     });
     console.log('Persistence initialized');
-    app.listen(env.PORT, () => {
-      console.log(`Server running on port ${env.PORT}`);
+    const port = Number(env.PORT || 3000);
+    app.listen(port, () => {
+      console.log(`Server running on port ${port}`);
     });
   } catch (e) {
     console.error('Persistence init failed:', (e as any)?.message || e);
@@ -250,6 +239,17 @@ app.post('/trinks/agendamentos', async (req, res) => {
 })();
 
 // Endpoints administrativos simples
+app.get('/admin', (_req, res) => {
+  res.json({
+    status: 'ok',
+    name: 'Marliê Admin',
+    endpoints: [
+      '/health',
+      '/admin/state/:phone (GET)',
+      '/admin/state/:phone (POST)'
+    ]
+  });
+});
 app.get('/admin/state/:phone', async (req, res) => {
   try {
     const state = await getConversationState(req.params.phone);
@@ -268,8 +268,22 @@ app.post('/admin/state/:phone', async (req, res) => {
   }
 });
 
-// Start server
-const port = Number(env.PORT || 3000);
-app.listen(port, () => {
-  console.log(`Marliê API running on http://localhost:${port}`);
-});
+// Util: normalizar número para somente dígitos (DDI+DDD+NÚMERO)
+function normalizeNumber(input?: string): string | null {
+  if (!input) return null;
+  const jid = input.includes('@') ? input.split('@')[0] : input;
+  const digits = jid.replace(/\D+/g, '');
+  return digits.length ? digits : null;
+}
+
+// Extrator genérico de texto da mensagem
+function extractTextFromMessage(msg: any): string | undefined {
+  return (
+    msg?.conversation ||
+    msg?.extendedTextMessage?.text ||
+    msg?.imageMessage?.caption ||
+    msg?.videoMessage?.caption ||
+    msg?.message?.conversation ||
+    msg?.message?.extendedTextMessage?.text
+  );
+}
