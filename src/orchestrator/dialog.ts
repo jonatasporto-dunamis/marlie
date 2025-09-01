@@ -78,26 +78,44 @@ async function ensureTrinksClientByPhone(whatsPhone: string, nameFallback?: stri
 async function resolveServiceInfoByName(nameLike: string): Promise<{ id: number; duracaoEmMinutos: number; valor: number } | null> {
   try {
     const q = (nameLike || '').trim().toLowerCase();
-    // Evitar aceitar categorias genéricas
-    const categoriasGenericas = ['manicure', 'cabelo', 'sobrancelha', 'depilação', 'depilacao', 'cílios', 'cilios', 'maquiagem'];
+    // Evitar aceitar categorias genéricas (inclui variações comuns)
+    const categoriasGenericas = [
+      'manicure', 'pedicure', 'unha', 'unhas', 'cabelo', 'cabelos', 'barba', 'sobrancelha', 'sobrancelhas',
+      'depilação', 'depilacao', 'depilar', 'depil', 'cílios', 'cilios', 'maquiagem', 'make', 'estética', 'estetica'
+    ];
     if (categoriasGenericas.includes(q)) {
       return null;
     }
-    const services = await trinks.Trinks.buscarServicos({ nome: nameLike });
+
+    // Buscar apenas serviços visíveis ao cliente para evitar categorias/itens ocultos
+    const services = await trinks.Trinks.buscarServicos({ nome: nameLike, somenteVisiveisCliente: true });
     const list = services?.data || services || [];
     const arr = Array.isArray(list) ? list : [];
     if (arr.length === 0) return null;
 
-    // Tentativa 1: match exato por nome
-    let found = arr.find((s: any) => String(s.nome || s.nomeservico || '').toLowerCase() === q);
-    // Tentativa 2: match por inclusão
-    if (!found) found = arr.find((s: any) => String(s.nome || s.nomeservico || '').toLowerCase().includes(q));
+    // Heurísticas para filtrar apenas serviços agendáveis (evitar categorias)
+    const isAgendavel = (s: any) => {
+      const dur = Number(s.duracaoEmMinutos ?? s.duracao ?? s.duracao_minutos ?? 0);
+      const hasChildren = Array.isArray(s.itens) || Array.isArray(s.subitens) || Array.isArray(s.subservicos);
+      const tipo = String(s.tipo ?? s.categoria ?? '').toLowerCase();
+      const looksCategory = s.isCategoria === true || tipo === 'categoria' || hasChildren === true;
+      const hasValidId = Number(s.id ?? s.servicoId ?? s.codigo ?? 0) > 0;
+      return hasValidId && dur > 0 && !looksCategory;
+    };
 
-    const first = found || arr[0];
+    const candidates = arr.filter(isAgendavel);
+    if (candidates.length === 0) return null;
+
+    // Tentativa 1: match exato por nome dentro dos candidatos
+    let found = candidates.find((s: any) => String(s.nome || s.nomeservico || '').toLowerCase() === q);
+    // Tentativa 2: match por inclusão
+    if (!found) found = candidates.find((s: any) => String(s.nome || s.nomeservico || '').toLowerCase().includes(q));
+
+    const first = found || candidates[0];
     const id = Number(first.id ?? first.servicoId ?? first.codigo ?? 0);
     const dur = Number(first.duracaoEmMinutos ?? first.duracao ?? first.duracao_minutos ?? 30);
     const val = Number(first.valor ?? first.preco ?? first.precoAtual ?? 0);
-    if (!id) return null;
+    if (!id || !(dur > 0)) return null;
     return { id, duracaoEmMinutos: isNaN(dur) ? 30 : dur, valor: isNaN(val) ? 0 : val };
   } catch (e) {
     return null;
@@ -424,6 +442,8 @@ AGENDAMENTO:
 - Para agendamentos: colete serviço, data e horário de forma natural
 - Confirme os detalhes antes de finalizar
 - Se já tiver algumas informações, não peça novamente
+- Nunca confirme agendamentos por conta própria. A confirmação só ocorre quando o sistema retorna um ID de agendamento pela integração. Se não houver ID, informe que irá verificar disponibilidade e peça outro horário/profissional.
+- Não invente horários, IDs ou disponibilidade. Se não souber, diga que vai verificar e ofereça ajuda humana.
 
 CADASTRO:
 - Para novos clientes: solicite nome completo e contato
