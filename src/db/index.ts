@@ -16,6 +16,22 @@ export type ConversationState = {
 
 let redis: RedisClientType | null = null;
 let pg: PgClient | null = null;
+let legacyPg: PgClient | null = null;
+
+function getLegacyPg(): PgClient | null {
+  if (legacyPg) return legacyPg;
+  const url = process.env.LEGACY_DATABASE_URL;
+  if (!url) {
+    console.warn('LEGACY_DATABASE_URL not set. Legacy DB access disabled.');
+    return null;
+  }
+  legacyPg = new PgClient({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  legacyPg.connect().catch((err) => {
+    console.error('Failed to connect to legacy database:', err);
+    legacyPg = null;
+  });
+  return legacyPg;
+}
 
 export async function initPersistence(opts: { redisUrl?: string | null; databaseUrl?: string | null; databaseSsl?: boolean | 'no-verify' }) {
   console.log('Iniciando persistência...');
@@ -511,7 +527,9 @@ export async function getServicosSuggestions(
   if (q.rows.length > 0) return q.rows;
 
   // Fallback: consultar tabela legada servicos_profissionais_marcleiaabade quando não houver sugestões
-  const q2 = await pg.query(
+  const legacyClient = getLegacyPg();
+  if (!legacyClient) return [];
+  const q2 = await legacyClient.query(
     `SELECT servicoid  as "servicoId",
             nomeservico as "servicoNome",
             duracaoemminutos as "duracaoMin",
