@@ -1,5 +1,8 @@
 import { createClient as createRedisClient, RedisClientType } from 'redis';
 import { Client as PgClient } from 'pg';
+import { logger } from '../logger';
+
+const LEGACY_FALLBACK_ENABLED = process.env.LEGACY_FALLBACK_ENABLED !== 'false';
 
 export type ConversationState = {
   etapaAtual?: string;
@@ -18,11 +21,17 @@ let redis: RedisClientType | null = null;
 let pg: PgClient | null = null;
 let legacyPg: PgClient | null = null;
 
+
+
 function getLegacyPg(): PgClient | null {
+  if (!LEGACY_FALLBACK_ENABLED) {
+    logger.debug('Fallback do banco de dados legado desabilitado via variável de ambiente.');
+    return null;
+  }
   if (legacyPg) return legacyPg;
   const url = process.env.LEGACY_DATABASE_URL;
   if (!url) {
-    console.warn('LEGACY_DATABASE_URL not set. Legacy DB access disabled.');
+    logger.warn('LEGACY_DATABASE_URL not set. Legacy DB access disabled.');
     return null;
   }
   // Ajuste de SSL: somente ativa SSL quando explicitamente configurado
@@ -30,7 +39,7 @@ function getLegacyPg(): PgClient | null {
   const legacySsl = sslMode === 'no-verify' ? { rejectUnauthorized: false } : (sslMode === 'true' || sslMode === '1' ? true : undefined);
   legacyPg = new PgClient({ connectionString: url, ssl: legacySsl as any });
   legacyPg.connect().catch((err) => {
-    console.error('Failed to connect to legacy database:', err);
+    logger.error('Failed to connect to legacy database:', err);
     legacyPg = null;
   });
   return legacyPg;
@@ -530,6 +539,10 @@ export async function getServicosSuggestions(
   if (q.rows.length > 0) return q.rows;
 
   // Fallback: consultar tabela legada servicos_profissionais_marcleiaabade quando não houver sugestões
+  if (!LEGACY_FALLBACK_ENABLED) {
+    logger.debug('Fallback do banco de dados legado desabilitado via variável de ambiente.');
+    return [];
+  }
   const legacyClient = getLegacyPg();
   if (!legacyClient) return [];
   try {
@@ -547,7 +560,7 @@ export async function getServicosSuggestions(
     );
     return q2.rows;
   } catch (err) {
-    console.warn('Legacy fallback disabled due to error:', (err as any)?.message || err);
+    logger.warn('Legacy fallback disabled due to error:', (err as any)?.message || err);
     return [];
   }
 }
