@@ -37,7 +37,7 @@ function getClient() {
     headers: {
       'Content-Type': 'application/json',
       'X-Api-Key': env.TRINKS_API_KEY,
-      'X-Estabelecimento-Id': env.TRINKS_ESTABELECIMENTO_ID,
+      'estabelecimentoId': env.TRINKS_ESTABELECIMENTO_ID,
     },
   });
   
