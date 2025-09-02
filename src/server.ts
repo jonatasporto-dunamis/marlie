@@ -3,7 +3,7 @@ import express from 'express';
 import { z } from 'zod';
 import axios from 'axios';
 import * as trinks from './integrations/trinks';
-import { initPersistence, setConversationState, getConversationState, recordAppointmentAttempt } from './db/index';
+import { initPersistence, setConversationState, getConversationState, recordAppointmentAttempt, cleanExpiredConversationStates } from './db/index';
 import jwt from 'jsonwebtoken';
 import { getAllConversationStates } from './db/index';
 import logger from './utils/logger';
@@ -320,6 +320,50 @@ app.get('/admin/states', authMiddleware, async (_req, res) => {
   }
 });
 logger.info('Admin routes registered');
+
+// Endpoint para sincronizar serviços do Trinks para o catálogo local
+app.post('/admin/sync-servicos', authMiddleware, async (req, res) => {
+  try {
+    const { Trinks } = await import('./integrations/trinks');
+    const { upsertServicosProf } = await import('./db/index');
+    
+    // Buscar todos os serviços do Trinks
+    const servicos = await Trinks.buscarServicos({ somenteVisiveisCliente: true });
+    
+    if (!servicos || !Array.isArray(servicos)) {
+      return res.status(400).json({ error: 'Nenhum serviço encontrado no Trinks' });
+    }
+    
+    // Mapear serviços para o formato da tabela local
+    const servicosFormatados = servicos.map((servico: any) => ({
+      servicoId: servico.id || servico.servicoId,
+      servicoNome: servico.nome || servico.nomeServico,
+      duracaoMin: servico.duracaoEmMinutos || servico.duracao || 60,
+      valor: servico.preco || servico.valor || null,
+      profissionalId: servico.profissionalId || 0, // 0 = genérico/qualquer profissional
+      visivelCliente: true,
+      ativo: true
+    }));
+    
+    // Inserir/atualizar serviços na tabela local
+    await upsertServicosProf('default', servicosFormatados);
+    
+    logger.info(`Sincronizados ${servicosFormatados.length} serviços do Trinks`);
+    
+    res.json({ 
+      success: true, 
+      message: `${servicosFormatados.length} serviços sincronizados com sucesso`,
+      servicos: servicosFormatados.length
+    });
+  } catch (error: any) {
+    logger.error('Erro ao sincronizar serviços do Trinks:', error);
+    res.status(500).json({ 
+      error: 'Erro ao sincronizar serviços', 
+      details: error?.message || 'Erro desconhecido'
+    });
+  }
+});
+
 app.post('/trinks/agendamentos', async (req, res) => {
   try {
     const { servicoId, clienteId, dataHoraInicio, duracaoEmMinutos, valor, confirmado, observacoes, profissionalId } = req.body || {};
@@ -406,6 +450,17 @@ if (process.env.NODE_ENV !== 'test') {
     redisUrl: env.REDIS_URL || null,
     databaseUrl: env.DATABASE_URL || null,
     databaseSsl,
+  }).then(() => {
+    // Configurar limpeza automática de estados expirados a cada hora
+    setInterval(async () => {
+      try {
+        await cleanExpiredConversationStates();
+      } catch (error) {
+        logger.error('Erro na limpeza automática de estados:', error);
+      }
+    }, 60 * 60 * 1000); // 1 hora
+    
+    logger.info('Sistema de persistência inicializado com limpeza automática');
   }).catch((e) => {
     console.error('Persistência não inicializada:', e?.message || e);
   });

@@ -1,6 +1,6 @@
 import { createClient as createRedisClient, RedisClientType } from 'redis';
 import { Client as PgClient } from 'pg';
-import { logger } from '../logger';
+import logger from '../utils/logger';
 
 const LEGACY_FALLBACK_ENABLED = process.env.LEGACY_FALLBACK_ENABLED !== 'false';
 
@@ -180,6 +180,12 @@ async function ensureTables() {
   try {
     await pg.query('ALTER TABLE appointment_requests ALTER COLUMN tenant_id SET NOT NULL');
   } catch (e) {}
+  // Adicionar constraint UNIQUE para conversation_states para permitir UPSERT
+  try {
+    await pg.query('ALTER TABLE conversation_states ADD CONSTRAINT conversation_states_tenant_contact_key UNIQUE (tenant_id, contact_id)');
+  } catch (e) {
+    // Constraint já existe ou erro na criação
+  }
 }
 
 export async function getOrCreateContactByPhone(
@@ -219,8 +225,16 @@ export async function setConversationState(tenantId: string, phone: string, stat
   }
   if (pg) {
     const contact = await getOrCreateContactByPhone(tenantId, phone);
+    // Usar UPSERT para manter apenas o estado mais recente por contato
     await pg.query(
-      'INSERT INTO conversation_states (tenant_id, contact_id, etapa_atual, state_json, updated_at, expires_at) VALUES ($1,$2,$3,$4,now(),$5)',
+      `INSERT INTO conversation_states (tenant_id, contact_id, etapa_atual, state_json, updated_at, expires_at) 
+       VALUES ($1, $2, $3, $4, now(), $5)
+       ON CONFLICT (tenant_id, contact_id) 
+       DO UPDATE SET 
+         etapa_atual = EXCLUDED.etapa_atual,
+         state_json = EXCLUDED.state_json,
+         updated_at = EXCLUDED.updated_at,
+         expires_at = EXCLUDED.expires_at`,
       [tenantId, contact?.id || null, state.etapaAtual || null, payload, new Date(Date.now() + ttlSeconds * 1000)]
     );
   }
@@ -295,10 +309,19 @@ export function getRedis() { return redis; }
 
 // Função para limpar histórico de mensagens antigas (mais de 2 horas)
 function cleanOldMessages(messageHistory?: Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }>): Array<{ role: 'user' | 'assistant'; content: string; timestamp: string }> {
-  if (!messageHistory) return [];
+  if (!messageHistory || messageHistory.length <= 30) return messageHistory || [];
   
-  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-  return messageHistory.filter(msg => msg.timestamp > twoHoursAgo);
+  // Estratégia inteligente: manter as primeiras 5 mensagens (contexto inicial) 
+  // e as últimas 25 mensagens (contexto recente)
+  const firstMessages = messageHistory.slice(0, 5);
+  const recentMessages = messageHistory.slice(-25);
+  
+  // Evitar duplicatas se houver sobreposição
+  if (messageHistory.length <= 30) {
+    return messageHistory;
+  }
+  
+  return [...firstMessages, ...recentMessages.slice(5)];
 }
 
 // Função para adicionar mensagem ao histórico
@@ -489,6 +512,21 @@ export async function getAllConversationStates(tenantId: string): Promise<any[]>
     [tenantId]
   );
   return result.rows;
+}
+
+// Função para limpar estados de conversa expirados
+export async function cleanExpiredConversationStates(): Promise<void> {
+  if (!pg) return;
+  try {
+    const result = await pg.query(
+      'DELETE FROM conversation_states WHERE expires_at < now()'
+    );
+    if (result.rowCount && result.rowCount > 0) {
+      logger.info(`Cleaned ${result.rowCount} expired conversation states`);
+    }
+  } catch (error) {
+    logger.error('Error cleaning expired conversation states:', error);
+  }
 }
 
 export async function upsertServicosProf(
