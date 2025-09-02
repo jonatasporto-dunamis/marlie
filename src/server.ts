@@ -212,8 +212,9 @@ async function sendWhatsappText(number: string, text: string) {
   const base = String(env.EVOLUTION_BASE_URL).replace(/\/$/, '');
   const url = `${base}/message/sendText/${env.EVOLUTION_INSTANCE}`;
   try {
-    const payload = { number, options: { delay: 1200, presence: 'composing' }, textMessage: { text } };
-    console.log('Evolution sendText request:', { url, number, hasApiKey: Boolean(env.EVOLUTION_API_KEY), instance: env.EVOLUTION_INSTANCE });
+    // Evolution API v2 payload
+    const payload = { number, text, delay: 1200 } as const;
+    console.log('Evolution sendText request:', { url, payload, hasApiKey: Boolean(env.EVOLUTION_API_KEY), instance: env.EVOLUTION_INSTANCE });
     const resp = await axios.post(
       url,
       payload,
@@ -221,7 +222,13 @@ async function sendWhatsappText(number: string, text: string) {
     );
     console.log('Evolution sendText response:', { status: resp.status, data: resp.data?.status || resp.data });
   } catch (e: any) {
-    console.error('Falha ao enviar mensagem via Evolution API:', e?.response?.data || e?.message || e);
+    const errPayload = {
+      status: e?.response?.status,
+      statusText: e?.response?.statusText,
+      data: e?.response?.data,
+      message: e?.message,
+    };
+    console.error('Falha ao enviar mensagem via Evolution API:', errPayload);
   }
 }
 
