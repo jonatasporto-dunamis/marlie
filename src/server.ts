@@ -212,9 +212,10 @@ async function sendWhatsappText(number: string, text: string) {
   const base = String(env.EVOLUTION_BASE_URL).replace(/\/$/, '');
   const url = `${base}/message/sendText/${env.EVOLUTION_INSTANCE}`;
   try {
+    const payload = { number, text, textMessage: { text } }; // inclui ambos formatos
     await axios.post(
       url,
-      { number, text },
+      payload,
       { headers: { apikey: env.EVOLUTION_API_KEY, 'Content-Type': 'application/json; charset=utf-8' } }
     );
   } catch (e: any) {
