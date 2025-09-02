@@ -532,19 +532,24 @@ export async function getServicosSuggestions(
   // Fallback: consultar tabela legada servicos_profissionais_marcleiaabade quando não houver sugestões
   const legacyClient = getLegacyPg();
   if (!legacyClient) return [];
-  const q2 = await legacyClient.query(
-    `SELECT servicoid  as "servicoId",
-            nomeservico as "servicoNome",
-            duracaoemminutos as "duracaoMin",
-            preco        as valor
-       FROM servicos_profissionais_marcleiaabade
-      WHERE visivelparacliente IS TRUE
-        AND lower(nomeservico) LIKE $1
-      ORDER BY valor NULLS LAST, nomeservico
-      LIMIT $2`,
-    [like, max]
-  );
-  return q2.rows;
+  try {
+    const q2 = await legacyClient.query(
+      `SELECT servicoid  as "servicoId",
+              nomeservico as "servicoNome",
+              duracaoemminutos as "duracaoMin",
+              preco        as valor
+         FROM servicos_profissionais_marcleiaabade
+        WHERE visivelparacliente IS TRUE
+          AND lower(nomeservico) LIKE $1
+        ORDER BY valor NULLS LAST, nomeservico
+        LIMIT $2`,
+      [like, max]
+    );
+    return q2.rows;
+  } catch (err) {
+    console.warn('Legacy fallback disabled due to error:', (err as any)?.message || err);
+    return [];
+  }
 }
 
 export async function existsServicoInCatalog(
