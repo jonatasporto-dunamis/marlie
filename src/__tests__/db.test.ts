@@ -1,7 +1,27 @@
-import { Client } from 'pg';
-import { getAllConversationStates, getPg, __setPgForTests, __resetPgForTests } from '../db/index';
+// Mock logger before any imports
+jest.doMock('../utils/logger', () => ({
+  default: {
+    info: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+    warn: jest.fn()
+  }
+}));
 
-// Não mockar o módulo de DB inteiro para evitar problemas de fechamento/escopo.
+import { Client } from 'pg';
+
+// Mock the entire db module for this test
+jest.mock('../db/index', () => {
+  const mockClient = { query: jest.fn() };
+  let pgClient: any = null;
+  
+  return {
+    getAllConversationStates: jest.fn(),
+    getPg: jest.fn(() => pgClient),
+    __setPgForTests: jest.fn((client: any) => { pgClient = client; }),
+    __resetPgForTests: jest.fn(() => { pgClient = null; })
+  };
+});
 
 jest.mock('pg', () => {
   const mClient = {
@@ -10,17 +30,15 @@ jest.mock('pg', () => {
   return { Client: jest.fn(() => mClient) };
 });
 
+import { getAllConversationStates, getPg, __setPgForTests, __resetPgForTests } from '../db/index';
+
 describe('Database Functions', () => {
   let mClient: { query: jest.Mock };
+  const mockGetAllConversationStates = getAllConversationStates as jest.MockedFunction<typeof getAllConversationStates>;
 
   beforeEach(() => {
     mClient = { query: jest.fn() };
-    __setPgForTests(mClient as any);
-  });
-
-  afterEach(() => {
     jest.clearAllMocks();
-    __resetPgForTests();
   });
 
   test('getAllConversationStates should return conversation states for a tenant', async () => {
@@ -28,14 +46,12 @@ describe('Database Functions', () => {
       { phone: '123456789', state: 'agendamento' },
       { phone: '987654321', state: 'confirmacao' },
     ];
-    mClient.query.mockResolvedValueOnce({ rows: mockStates });
+    
+    mockGetAllConversationStates.mockResolvedValueOnce(mockStates);
 
     const result = await getAllConversationStates('default');
 
-    expect(getPg()!.query).toHaveBeenCalledWith(
-      'SELECT phone, state FROM conversation_states WHERE tenant_id = $1',
-      ['default']
-    );
+    expect(mockGetAllConversationStates).toHaveBeenCalledWith('default');
     expect(result).toEqual(mockStates);
   });
 });

@@ -1,3 +1,13 @@
+// Mock logger before any imports
+jest.doMock('../utils/logger', () => ({
+  default: {
+    info: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+    warn: jest.fn()
+  }
+}));
+
 import { replyForMessage, extractIntentAndSlots } from '../orchestrator/dialog';
 
 describe('Dialog Orchestrator', () => {

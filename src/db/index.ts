@@ -170,26 +170,26 @@ async function ensureTables() {
     await pg.query('ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_tenant_phone_key');
     await pg.query('ALTER TABLE contacts ADD CONSTRAINT contacts_tenant_phone_key UNIQUE (tenant_id, phone)');
     await pg.query('ALTER TABLE contacts ALTER COLUMN tenant_id SET NOT NULL');
-  } catch (e) {
+  } catch (e: any) {
     console.error('Migration failed:', e);
   }
   // Adicionar novos campos se não existirem
   try {
     await pg.query('ALTER TABLE contacts ADD COLUMN IF NOT EXISTS primeiro_nome TEXT NULL');
     await pg.query('ALTER TABLE contacts ADD COLUMN IF NOT EXISTS push_name TEXT NULL');
-  } catch (e) {
+  } catch (e: any) {
     console.error('Migration for new contact fields failed:', e);
   }
   try {
     await pg.query('ALTER TABLE conversation_states ALTER COLUMN tenant_id SET NOT NULL');
-  } catch (e) {}
+  } catch (e: any) {}
   try {
     await pg.query('ALTER TABLE appointment_requests ALTER COLUMN tenant_id SET NOT NULL');
-  } catch (e) {}
+  } catch (e: any) {}
   // Adicionar constraint UNIQUE para conversation_states para permitir UPSERT
   try {
     await pg.query('ALTER TABLE conversation_states ADD CONSTRAINT conversation_states_tenant_contact_key UNIQUE (tenant_id, contact_id)');
-  } catch (e) {
+  } catch (e: any) {
     // Constraint já existe ou erro na criação
   }
 }
@@ -309,6 +309,41 @@ export async function recordAppointmentAttempt(params: {
       params.idempotencyKey || null,
     ]
   );
+}
+
+// Função para registrar interações pós-agendamento
+export async function recordPostBookingInteraction(params: {
+  tenantId: string;
+  phone: string;
+  bookingId: string | number;
+  interactionType: string;
+  timestamp: Date;
+  metadata?: any;
+}) {
+  if (!pg) return;
+  
+  try {
+    await pg.query(
+      `INSERT INTO post_booking_interactions (
+        phone_number, booking_id, interaction_type, interaction_data, created_at
+      ) VALUES ($1, $2, $3, $4, $5)`,
+      [
+        params.phone,
+        params.bookingId.toString(),
+        params.interactionType,
+        JSON.stringify(params.metadata || {}),
+        params.timestamp
+      ]
+    );
+    
+    logger.info('Post-booking interaction recorded', {
+      phone: params.phone,
+      bookingId: params.bookingId,
+      interactionType: params.interactionType
+    });
+  } catch (error) {
+    logger.error('Error recording post-booking interaction:', error);
+  }
 }
 
 export function getPg() { return pg; }
@@ -722,3 +757,6 @@ export async function releaseIdempotencyKey(key: string): Promise<void> {
     await redis.del(`idemp:booking:${key}`);
   } catch {}
 }
+
+// Export pg client for direct database access
+export { pg };

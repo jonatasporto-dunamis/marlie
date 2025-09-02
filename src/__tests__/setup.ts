@@ -4,6 +4,7 @@
 process.env.ADMIN_USER = 'admin';
 process.env.ADMIN_PASS = 'password';
 process.env.JWT_SECRET = 'test_secret';
+process.env.ADMIN_TOKEN = 'test_admin_token';
 process.env.NODE_ENV = 'test';
 
 // Mock Pinecone
@@ -31,10 +32,14 @@ jest.mock('@langchain/openai', () => {
 // Mock database connections
 jest.mock('../db/index', () => {
   return {
+    initPersistence: jest.fn().mockResolvedValue(undefined),
     getConversationState: jest.fn().mockResolvedValue(null),
     setConversationState: jest.fn().mockResolvedValue(undefined),
     updateClientSession: jest.fn().mockResolvedValue(undefined),
     recordAppointmentAttempt: jest.fn().mockResolvedValue(undefined),
+    recordPostBookingInteraction: jest.fn().mockResolvedValue(undefined),
+    cleanExpiredConversationStates: jest.fn().mockResolvedValue(undefined),
+    getAllConversationStates: jest.fn().mockResolvedValue([]),
     getServicosSuggestions: jest.fn().mockResolvedValue([]),
     existsServicoInCatalog: jest.fn().mockResolvedValue(true),
     addMessageToHistory: jest.fn().mockReturnValue([]),
@@ -43,8 +48,13 @@ jest.mock('../db/index', () => {
     acquireIdempotencyKey: jest.fn().mockResolvedValue(true),
     getIdempotencyResult: jest.fn().mockResolvedValue(null),
     setIdempotencyResult: jest.fn().mockResolvedValue(undefined),
+    getPg: jest.fn().mockReturnValue(null),
+    __setPgForTests: jest.fn(),
+    __resetPgForTests: jest.fn(),
     releaseIdempotencyKey: jest.fn().mockResolvedValue(undefined),
-    cleanOldMessages: jest.fn().mockResolvedValue(undefined)
+    cleanOldMessages: jest.fn().mockResolvedValue(undefined),
+    pg: null,
+    redis: null
   };
 });
 
@@ -68,13 +78,32 @@ jest.mock('../llm/openai', () => {
 });
 
 // Mock logger
-jest.mock('../utils/logger', () => {
-  return {
-    default: {
-      info: jest.fn(),
-      error: jest.fn(),
-      debug: jest.fn(),
-      warn: jest.fn()
-    }
-  };
-});
+// Mock winston first
+jest.mock('winston', () => ({
+  createLogger: jest.fn(() => ({
+    info: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+    warn: jest.fn()
+  })),
+  format: {
+    combine: jest.fn(),
+    timestamp: jest.fn(),
+    json: jest.fn(),
+    simple: jest.fn()
+  },
+  transports: {
+    Console: jest.fn(),
+    File: jest.fn()
+  }
+}));
+
+// Mock logger
+jest.mock('../utils/logger', () => ({
+  default: {
+    info: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+    warn: jest.fn()
+  }
+}));

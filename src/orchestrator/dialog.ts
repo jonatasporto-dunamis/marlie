@@ -3,6 +3,15 @@ import * as trinks from '../integrations/trinks';
 import { getConversationState, setConversationState, recordAppointmentAttempt, addMessageToHistory } from '../db/index';
 // import { queryRag } from '../utils/rag'; // Temporariamente desabilitado
 import logger from '../utils/logger';
+import { incrementConversationsStarted, incrementServiceSuggestions, incrementBookingsConfirmed, incrementTrinksErrors } from '../middleware/metrics';
+import { suggestProactiveTimeSlots, parseRelativeDateTime, detectShortcuts, convertRelativeDateToISO } from '../utils/proactive-scheduling';
+import { processShortcut, processShortcutFollowUp } from '../utils/shortcuts';
+import { recommendSlots, RecommendedSlot } from '../utils/recommendation-engine';
+import { generateBookingSummary, generatePostBookingCTAs as generateComplementaryCTAs, processCTAResponse } from '../utils/post-booking-templates';
+import { UpsellEngine, isUpsellResponse } from '../utils/upsell-engine';
+import { PreVisitNotificationEngine } from '../utils/pre-visit-notifications';
+
+import { pg, recordPostBookingInteraction } from '../db/index';
 
 function normalizeNumber(input?: string): string | null {
   if (!input) return null;
@@ -28,7 +37,7 @@ type Extracted = {
 };
 
 export async function extractIntentAndSlots(text: string): Promise<Extracted> {
-  logger.debug(`Extraindo intenção e slots para texto: ${text}`);
+  // logger.debug(`Extraindo intenção e slots para texto: ${text}`); // Temporariamente comentado para testes
   // const ragContext = await queryRag('Trinks API endpoints for scheduling and availability'); // Temporariamente desabilitado
   const ragContext = 'API Trinks: endpoints para agendamentos, verificação de disponibilidade, busca de clientes e serviços.';
   const system: ChatMessage = {
@@ -76,6 +85,9 @@ async function ensureTrinksClientByPhone(whatsPhone: string, nameFallback?: stri
     const created = await trinks.Trinks.criarCliente(payload);
     return created;
   } catch (e: any) {
+    // Incrementar métrica de erros da API Trinks
+    const errorCode = e?.response?.status?.toString() || 'unknown';
+    incrementTrinksErrors(errorCode, 'cliente');
     throw new Error('Não foi possível localizar/criar cliente no Trinks');
   }
 }
@@ -161,6 +173,11 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
   
   // Adicionar mensagem do usuário ao histórico
   const messageHistory = addMessageToHistory(currentState?.messageHistory, 'user', text);
+  
+  // Incrementar métrica de conversas iniciadas para novas conversas
+  if (!currentState || messageHistory.length <= 2) {
+    incrementConversationsStarted('default');
+  }
 
   // Atualizar sessão do cliente com dados da conversa
   const { updateClientSession } = await import('../db/index');
@@ -185,6 +202,109 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
     await updateClientSession('default', number, { sessionData });
   }
 
+  // 0) Verificar se é um atalho primeiro
+  if (number) {
+    const shortcutResult = await processShortcut(text, number, currentState);
+    if (shortcutResult.action !== 'none') {
+      // Atualizar estado se necessário
+      if (shortcutResult.requiresFollowUp) {
+        await setConversationState('default', number, {
+          etapaAtual: 'shortcut_followup',
+          slots: { ...persistentSlots, shortcutContext: shortcutResult.followUpContext },
+          messageHistory
+        });
+      }
+      return shortcutResult.response;
+    }
+    
+    // Verificar se é follow-up de atalho
+    if (currentState?.etapaAtual === 'shortcut_followup' && persistentSlots.shortcutContext) {
+      const followUpResult = await processShortcutFollowUp(text, number, persistentSlots.shortcutContext);
+      if (followUpResult.action !== 'none') {
+        // Limpar contexto de atalho se não precisar de mais follow-up
+        if (!followUpResult.requiresFollowUp) {
+          await setConversationState('default', number, {
+            etapaAtual: 'initial',
+            slots: { ...persistentSlots, shortcutContext: undefined },
+            messageHistory
+          });
+        } else {
+          await setConversationState('default', number, {
+            etapaAtual: 'shortcut_followup',
+            slots: { ...persistentSlots, shortcutContext: followUpResult.followUpContext },
+            messageHistory
+          });
+        }
+        return followUpResult.response;
+      }
+    }
+  }
+  
+  // Processar respostas aos CTAs pós-agendamento
+   if (currentState?.etapaAtual?.startsWith('aguardando_cta_')) {
+     const ctaType = currentState.etapaAtual.replace('aguardando_cta_', '');
+     const lastBookingId = currentState.slots?.lastAgendamentoId;
+     
+     if (lastBookingId && number) {
+       const ctaResponse = processCTAResponse(
+          ctaType as 'reminder' | 'location' | 'paymentMethod',
+          text,
+          {
+            bookingId: lastBookingId,
+            serviceName: currentState.slots?.nomeServico || 'Serviço',
+            date: currentState.slots?.data || '',
+            time: currentState.slots?.hora || '',
+            clientName: currentState.slots?.nomeCliente || 'Cliente'
+          }
+        );
+       
+       if (ctaResponse) {
+         // Limpar estado de CTA
+         const updatedSlots = { ...currentState.slots };
+         await setConversationState('default', number, {
+           ...currentState,
+           etapaAtual: 'initial',
+           slots: updatedSlots,
+           messageHistory
+         });
+         
+         return ctaResponse.response;
+       }
+     }
+   }
+   
+   // Processar respostas de upsell
+   if (currentState?.etapaAtual === 'aguardando_upsell' && number) {
+     const upsellEngine = new UpsellEngine('default');
+     const serviceName = currentState.slots?.nomeServico;
+     const servicePrice = currentState.slots?.servicePrice || 0;
+     
+     if (serviceName) {
+       const upsellResult = await upsellEngine.processUpsellResponse(text, {
+         tenantId: 'default',
+         phone: number,
+         selectedServiceName: serviceName,
+         selectedServicePrice: servicePrice
+       });
+       
+       // Atualizar estado para continuar com agendamento
+       const updatedSlots = { 
+         ...currentState.slots, 
+         upsellAccepted: upsellResult.accepted,
+         awaiting: 'date'
+       };
+       
+       await setConversationState('default', number, {
+         ...currentState,
+         etapaAtual: 'aguardando_data',
+         slots: updatedSlots,
+         messageHistory
+       });
+       
+       return upsellResult.message;
+     }
+   }
+  
   // 1) Usa LLM para detectar intenção/slots
   let extracted = await extractIntentAndSlots(text);
   
@@ -367,6 +487,42 @@ switch (currentSchedulingState) {
       const greeting = contactInfo?.firstName ? `${contactInfo.firstName},` : '';
       return `${greeting} entendi que você quer algo em "${serviceName}". Pode me dizer qual serviço específico deseja?`;
     }
+    
+    // Verificar se deve oferecer upsell após seleção do serviço
+    if (serviceName && !currentState?.slots?.upsellOffered && number) {
+      const upsellEngine = new UpsellEngine('default');
+      const serviceInfo = await resolveServiceInfoByName(serviceName);
+      
+      if (serviceInfo) {
+        const upsellSuggestion = await upsellEngine.generateUpsellSuggestion({
+          tenantId: 'default',
+          phone: number,
+          selectedServiceName: serviceName,
+          selectedServicePrice: serviceInfo.valor || 0
+        });
+        
+        if (upsellSuggestion) {
+          // Salvar estado aguardando resposta do upsell
+          const updatedSlots = { 
+            ...extracted.slots, 
+            nomeServico: serviceName,
+            servicePrice: serviceInfo.valor || 0,
+            upsellOffered: true,
+            awaiting: 'upsell'
+          };
+          
+          await setConversationState('default', number, {
+            slots: updatedSlots,
+            messageHistory,
+            contactInfo,
+            etapaAtual: 'aguardando_upsell',
+            lastText: text
+          });
+          
+          return upsellSuggestion;
+        }
+      }
+    }
 
     if (!date) {
       const updatedSlots = { ...extracted.slots, nomeServico: serviceName, awaiting: 'date' };
@@ -379,7 +535,101 @@ switch (currentSchedulingState) {
       });
       return `Perfeito! Para qual data você deseja agendar a ${serviceName.toLowerCase()}?`;
     }
+    
+    // Verificar se há termos relativos de data/período para sugestão proativa
     if (!time) {
+      const relativeDateInfo = parseRelativeDateTime(text);
+      
+      if (relativeDateInfo.dateRel && relativeDateInfo.period && number) {
+        try {
+          // Converter data relativa para ISO
+          const dateISO = convertRelativeDateToISO(relativeDateInfo.dateRel);
+          
+          // Usar motor de recomendação para sugestões personalizadas
+          const recommendedSlots = await recommendSlots(
+            'default',
+            number,
+            dateISO,
+            relativeDateInfo.period === 'manhã' ? 'manha' : relativeDateInfo.period
+          );
+          
+          // Fallback para sugestões proativas padrão se não houver recomendações
+          if (recommendedSlots.length > 0) {
+            const timeOptions = recommendedSlots.map(slot => slot.time).slice(0, 3).join(', ');
+            const dateFormatted = new Date(dateISO).toLocaleDateString('pt-BR');
+            const updatedSlots = { 
+              ...extracted.slots, 
+              nomeServico: serviceName, 
+              data: dateISO,
+              awaiting: 'time',
+              suggestedTimes: recommendedSlots.map(slot => slot.time)
+            };
+            
+            await setConversationState('default', number, { 
+              slots: updatedSlots,
+              messageHistory,
+              contactInfo,
+              etapaAtual: 'aguardando_horario_com_sugestoes',
+              lastText: text
+            });
+            
+            return `Ótimo! Para ${dateFormatted}, temos estes horários disponíveis:\n\n${timeOptions}\n\nQual prefere?`;
+          } else {
+            const proactiveSlots = await suggestProactiveTimeSlots(
+              info.id,
+              info.duracaoEmMinutos,
+              dateISO,
+              relativeDateInfo.period
+            );
+            
+            if (proactiveSlots.suggestions.length > 0) {
+              const timeOptions = proactiveSlots.suggestions.slice(0, 3).join(', ');
+              const dateFormatted = new Date(dateISO).toLocaleDateString('pt-BR');
+              const updatedSlots = { 
+                ...extracted.slots, 
+                nomeServico: serviceName, 
+                data: dateISO,
+                awaiting: 'time',
+                suggestedTimes: proactiveSlots.suggestions
+              };
+              
+              await setConversationState('default', number, { 
+                slots: updatedSlots,
+                messageHistory,
+                contactInfo,
+                etapaAtual: 'aguardando_horario_com_sugestoes',
+                lastText: text
+              });
+              
+              return `Ótimo! Para ${dateFormatted}, temos estes horários disponíveis:\n\n${timeOptions}\n\nQual prefere?`;
+            } else if (proactiveSlots.fallbackSuggestions && proactiveSlots.fallbackSuggestions.length > 0) {
+              const nextOptions = proactiveSlots.fallbackSuggestions.slice(0, 3).join(', ');
+              const dateFormatted = new Date(dateISO).toLocaleDateString('pt-BR');
+              const fallbackDateFormatted = new Date(proactiveSlots.fallbackDate + 'T00:00:00').toLocaleDateString('pt-BR');
+              const updatedSlots = { 
+                ...extracted.slots, 
+                nomeServico: serviceName, 
+                data: proactiveSlots.fallbackDate,
+                awaiting: 'time',
+                suggestedTimes: proactiveSlots.fallbackSuggestions
+              };
+              
+              await setConversationState('default', number, { 
+                slots: updatedSlots,
+                messageHistory,
+                contactInfo,
+                etapaAtual: 'aguardando_horario_com_sugestoes',
+                lastText: text
+              });
+              
+              return `Para ${dateFormatted} não temos disponibilidade. Que tal ${fallbackDateFormatted}?\n\nHorários disponíveis: ${nextOptions}\n\nQual prefere?`;
+            }
+          }
+        } catch (error) {
+          logger.error('Erro ao sugerir horários proativos:', error);
+        }
+      }
+      
       const updatedSlots = { ...extracted.slots, nomeServico: serviceName, data: date, awaiting: 'time' };
       await setConversationState('default', number || 'unknown', { 
         slots: updatedSlots,
@@ -434,6 +684,8 @@ switch (currentSchedulingState) {
           lastText: text
         });
         if (sugs.length > 0) {
+          // Incrementar métrica de sugestões de serviços
+          sugs.forEach(s => incrementServiceSuggestions('default', s.servicoNome));
           const lista = sugs.map((s, i) => `${i + 1}. ${s.servicoNome}`).join('\n');
           return `Antes de prosseguir, preciso que escolha um serviço do nosso catálogo. Algumas opções:\n\n${lista}`;
         }
@@ -517,6 +769,29 @@ Se precisar alterar, me avise.`;
       // Persistir resultado idempotente (se houver ID)
       if (created?.id) {
         await setIdempotencyResult(idemKey, created, 60 * 30);
+        // Incrementar métrica de agendamentos confirmados
+        incrementBookingsConfirmed('default', serviceName);
+        
+        // Agendar notificações de pré-visita automaticamente
+        try {
+          const preVisitEngine = new PreVisitNotificationEngine('default');
+          const appointmentDate = new Date(iso);
+          const clientName = client?.nome || contactInfo?.firstName || 'Cliente';
+          
+          await preVisitEngine.schedulePreVisitNotifications(
+            clientPhone,
+            clientName,
+            serviceName,
+            appointmentDate,
+            time,
+            undefined
+          );
+          
+          logger.info(`Notificações de pré-visita agendadas para agendamento ${created.id}`);
+        } catch (notificationError) {
+          logger.error('Erro ao agendar notificações de pré-visita:', notificationError);
+          // Não falhar o agendamento por erro nas notificações
+        }
       }
       await recordAppointmentAttempt({
         tenantId: 'default',
@@ -539,9 +814,51 @@ Se precisar alterar, me avise.`;
       await setConversationState('default', number || 'unknown', { slots: finalSlots });
       // Persistir slots após criação de agendamento bem-sucedida
       await updateClientSession('default', clientPhone, { sessionData: { ...sessionData, slots: finalSlots } });
-      return `Perfeito! Seu agendamento está confirmado:\n\n*Serviço:* ${serviceName}\n*Data:* ${date}\n*Horário:* ${time}\n*ID:* ${created.id}\n\nTe esperamos! Qualquer dúvida, estou aqui. 😊`;
+      
+      // Gerar resumo pós-agendamento com CTAs
+      const bookingData = {
+        id: created.id,
+        bookingId: created.id,
+        serviceName,
+        professionalName: undefined,
+        date,
+        time,
+        estimatedValue: info.valor || 0,
+        clientName: client?.nome || contactInfo?.firstName || 'Cliente',
+        clientPhone
+      };
+      
+      const establishmentConfig = {
+        name: 'Ateliê Marcleia Abade',
+        address: 'Rua das Flores, 123 - Salvador/BA',
+        phone: '(71) 99999-9999',
+        lateFeePolicy: 'Tolerância de 15 minutos de atraso',
+        noShowPolicy: 'Cancelamento com menos de 2h de antecedência pode gerar taxa',
+        arrivalInstructions: 'Chegue 5 minutos antes do horário agendado'
+      };
+      
+      const summary = generateBookingSummary(bookingData, establishmentConfig);
+       const ctas = generateComplementaryCTAs();
+       
+       // Registrar interação pós-agendamento
+        await recordPostBookingInteraction({
+          tenantId: 'default',
+          phone: clientPhone,
+          bookingId: created.id,
+          interactionType: 'booking_confirmed',
+          timestamp: new Date(),
+          metadata: { serviceName, date, time }
+        });
+        
+        // Registrar preferências do usuário para recomendações futuras
+        // Nota: Sistema de recomendação será implementado quando disponível
+       
+       return `${summary}\n\n${ctas}`;
     } catch (e: any) {
       logger.error('Erro no fluxo de agendamento:', e);
+      // Incrementar métrica de erros da API Trinks
+      const errorCode = e?.response?.status?.toString() || 'unknown';
+      incrementTrinksErrors(errorCode, 'agendamento');
       return 'Ops! Houve um erro ao processar seu agendamento. Pode tentar novamente? Ou me diga mais detalhes.';
     }
   }

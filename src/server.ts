@@ -7,6 +7,9 @@ import { initPersistence, setConversationState, getConversationState, recordAppo
 import jwt from 'jsonwebtoken';
 import { getAllConversationStates } from './db/index';
 import logger from './utils/logger';
+import { adminAuth, adminRateLimit, auditLogger } from './middleware/security';
+import { metricsMiddleware, metricsHandler, incrementConversationsStarted, incrementServiceSuggestions, incrementBookingsConfirmed, incrementTrinksErrors } from './middleware/metrics';
+import { healthHandler, readyHandler } from './middleware/health';
 
 export const app = express();
 
@@ -30,7 +33,14 @@ for (const m of __patchMethods) {
 }
 
 app.use(express.json({ limit: '1mb' }));
-// Middleware de log de requisições
+
+// Middleware de métricas (deve vir antes de outros middlewares)
+app.use(metricsMiddleware);
+
+// Middleware de auditoria e logs estruturados
+app.use(auditLogger);
+
+// Middleware de log de requisições (mantido para compatibilidade)
 app.use((req, _res, next) => {
   console.log(`[IN] ${req.method} ${req.url}`);
   next();
@@ -50,6 +60,7 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().optional(),
   REDIS_URL: z.string().optional(),
   DATABASE_SSL: z.string().optional(), // 'true' | 'false' | 'no-verify'
+  ADMIN_TOKEN: z.string().optional(), // Token for admin authentication
 });
 
 const env = EnvSchema.parse(process.env);
@@ -83,10 +94,12 @@ function extractTextFromMessage(msg: any): string | undefined {
   );
 }
 
-// Basic healthcheck
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', name: 'Marliê API' });
-});
+// Health checks with subchecks
+app.get('/health', healthHandler);
+app.get('/ready', readyHandler);
+
+// Metrics endpoint
+app.get('/metrics', metricsHandler);
 
 // Ping simples para diagnosticar
 app.get('/__ping', (_req, res) => res.json({ ok: true, at: 'root' }));
@@ -258,25 +271,30 @@ const authMiddleware = (req: any, res: any, next: any) => {
 
 // Login administrativo
 app.post('/admin/login', (req, res) => {
-  const { username, password } = req.body || {};
-  const envUserRaw = process.env.ADMIN_USER;
-  const envPassRaw = process.env.ADMIN_PASS;
-  const adminUser = envUserRaw || 'admin';
-  const adminPass = envPassRaw || 'admin123';
+  try {
+    const { username, password } = req.body || {};
+    const envUserRaw = process.env.ADMIN_USER;
+    const envPassRaw = process.env.ADMIN_PASS;
+    const adminUser = envUserRaw || 'admin';
+    const adminPass = envPassRaw || 'admin123';
 
-  // Permitir fallback aos valores padrão/ambiente quando credenciais não forem enviadas explicitamente (facilita testes)
-  const userToCheck = username ?? adminUser;
-  const passToCheck = password ?? adminPass;
-  
-  if (userToCheck === adminUser && passToCheck === adminPass) {
-    const token = jwt.sign(
-      { username: envUserRaw, role: 'admin' },
-      process.env.JWT_SECRET || 'default_secret',
-      { expiresIn: '1h' }
-    );
-    res.json({ token });
-  } else {
-    res.status(401).json({ error: 'Invalid credentials' });
+    // Permitir fallback aos valores padrão/ambiente quando credenciais não forem enviadas explicitamente (facilita testes)
+    const userToCheck = username ?? adminUser;
+    const passToCheck = password ?? adminPass;
+    
+    if (userToCheck === adminUser && passToCheck === adminPass) {
+      const token = jwt.sign(
+        { username: envUserRaw, role: 'admin' },
+        process.env.JWT_SECRET || 'default_secret',
+        { expiresIn: '1h' }
+      );
+      res.json({ token });
+    } else {
+      res.status(401).json({ error: 'Invalid credentials' });
+    }
+  } catch (error) {
+    logger.error('Error in admin login:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -284,7 +302,7 @@ app.post('/admin/login', (req, res) => {
 app.get('/ping-top', (_req, res) => {
   res.json({ ok: true, where: 'top' });
 });
-app.get('/admin', authMiddleware, (_req, res) => {
+app.get('/admin', adminRateLimit, adminAuth, (_req, res) => {
   res.json({
     status: 'ok',
     name: 'Marliê Admin',
@@ -292,7 +310,9 @@ app.get('/admin', authMiddleware, (_req, res) => {
       '/health',
       '/admin/state/:phone (GET)',
       '/admin/state/:phone (POST)',
-      '/admin/states (GET)'
+      '/admin/states (GET)',
+      '/admin/sync-servicos (POST)',
+      '/metrics (GET)'
     ]
   });
 });
@@ -301,7 +321,7 @@ app.get('/admin', authMiddleware, (_req, res) => {
 app.get('/ping-after-admin', (_req, res) => {
   res.json({ ok: true, where: 'after-admin' });
 });
-app.get('/admin/state/:phone', authMiddleware, async (req, res) => {
+app.get('/admin/state/:phone', adminRateLimit, adminAuth, async (req, res) => {
   try {
     const state = await getConversationState('default', req.params.phone);
     res.json({ phone: req.params.phone, state });
@@ -310,7 +330,7 @@ app.get('/admin/state/:phone', authMiddleware, async (req, res) => {
   }
 });
 
-app.post('/admin/state/:phone', authMiddleware, async (req, res) => {
+app.post('/admin/state/:phone', adminRateLimit, adminAuth, async (req, res) => {
   try {
     await setConversationState('default', req.params.phone, req.body || {});
     res.json({ ok: true });
@@ -319,19 +339,18 @@ app.post('/admin/state/:phone', authMiddleware, async (req, res) => {
   }
 });
 
-app.get('/admin/states', authMiddleware, async (_req, res) => {
+app.get('/admin/states', adminRateLimit, adminAuth, async (_req, res) => {
   try {
     const states = await getAllConversationStates('default');
-    res.json(states);
-  } catch (error) {
-    console.error('Error fetching states:', error);
-    res.status(500).json({ error: 'Failed to fetch states' });
+    res.json({ states });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message });
   }
 });  
 // logger.info('Admin routes registered'); // Commented for tests
 
 // Endpoint para sincronizar serviços do Trinks para o catálogo local
-app.post('/admin/sync-servicos', authMiddleware, async (req, res) => {
+app.post('/admin/sync-servicos', adminRateLimit, adminAuth, async (req, res) => {
   try {
     const { Trinks } = await import('./integrations/trinks');
     const { upsertServicosProf } = await import('./db/index');

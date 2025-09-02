@@ -1,0 +1,633 @@
+{
+  "description": "Dataset de frases reais para testes de NLU com gírias baianas e variações regionais",
+  "version": "1.0",
+  "created_at": "2024-01-22",
+  "test_cases": [
+    {
+      "id": 1,
+      "input": "Oi meu rei, quero fazer as unhas amanhã de manhã",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "manicure",
+        "dateRel": "amanhã",
+        "period": "manhã",
+        "action": "create"
+      },
+      "category": "agendamento_basico",
+      "dialect": "baiano"
+    },
+    {
+      "id": 2,
+      "input": "Oxe, preciso cortar esse cabelo hoje mesmo, viu!",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "corte de cabelo",
+        "dateRel": "hoje",
+        "action": "create"
+      },
+      "category": "agendamento_urgente",
+      "dialect": "baiano"
+    },
+    {
+      "id": 3,
+      "input": "Eita, quero fazer pedicure na sexta à tarde",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "pedicure",
+        "dateRel": "sexta",
+        "period": "tarde",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "baiano"
+    },
+    {
+      "id": 4,
+      "input": "Bom dia! Gostaria de agendar uma limpeza de pele para terça-feira às 14h",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "limpeza de pele",
+        "dateRel": "terça",
+        "timeISO": "14:00",
+        "action": "create"
+      },
+      "category": "agendamento_formal",
+      "dialect": "neutro"
+    },
+    {
+      "id": 5,
+      "input": "Ô minha filha, que horas vocês abrem?",
+      "expected_output": {
+        "intent": "hours",
+        "action": "query"
+      },
+      "category": "consulta_horarios",
+      "dialect": "baiano"
+    },
+    {
+      "id": 6,
+      "input": "Rapaz, quanto custa uma escova?",
+      "expected_output": {
+        "intent": "price",
+        "serviceName": "escova",
+        "action": "query"
+      },
+      "category": "consulta_preco",
+      "dialect": "baiano"
+    },
+    {
+      "id": 7,
+      "input": "Preciso remarcar meu horário de amanhã",
+      "expected_output": {
+        "intent": "reschedule",
+        "dateRel": "amanhã",
+        "action": "modify"
+      },
+      "category": "reagendamento",
+      "dialect": "neutro"
+    },
+    {
+      "id": 8,
+      "input": "Vixe, vou ter que cancelar meu agendamento",
+      "expected_output": {
+        "intent": "cancel",
+        "action": "cancel"
+      },
+      "category": "cancelamento",
+      "dialect": "baiano"
+    },
+    {
+      "id": 9,
+      "input": "Quero fazer design de sobrancelha com a Marcleia",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "design de sobrancelha",
+        "professionalName": "Marcleia",
+        "action": "create"
+      },
+      "category": "agendamento_profissional",
+      "dialect": "neutro"
+    },
+    {
+      "id": 10,
+      "input": "Arretado! Quero fazer unha gel na quinta de noite",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "unha gel",
+        "dateRel": "quinta",
+        "period": "noite",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "baiano"
+    },
+    {
+      "id": 11,
+      "input": "Oi querida, onde fica o salão?",
+      "expected_output": {
+        "intent": "location",
+        "action": "query"
+      },
+      "category": "consulta_endereco",
+      "dialect": "baiano"
+    },
+    {
+      "id": 12,
+      "input": "Massa! Quero cortar cabelo e fazer barba hoje às 15:30",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "corte de cabelo e barba",
+        "dateRel": "hoje",
+        "timeISO": "15:30",
+        "action": "create"
+      },
+      "category": "agendamento_multiplo",
+      "dialect": "baiano"
+    },
+    {
+      "id": 13,
+      "input": "Bora agendar uma hidratação para o fim de semana?",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "hidratação",
+        "period": "fim de semana",
+        "action": "create"
+      },
+      "category": "agendamento_periodo",
+      "dialect": "baiano"
+    },
+    {
+      "id": 14,
+      "input": "Meu nome é João Silva, telefone 71999887766",
+      "expected_output": {
+        "intent": "create_user",
+        "name": "João Silva",
+        "phone": "71999887766",
+        "action": "create"
+      },
+      "category": "cadastro_usuario",
+      "dialect": "neutro"
+    },
+    {
+      "id": 15,
+      "input": "Oxente, que dia vocês fazem progressiva?",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "progressiva",
+        "action": "query"
+      },
+      "category": "consulta_disponibilidade",
+      "dialect": "baiano"
+    },
+    {
+      "id": 16,
+      "input": "Quero fazer cutilagem e esmaltação na segunda de manhã",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "cutilagem e esmaltação",
+        "dateRel": "segunda",
+        "period": "manhã",
+        "action": "create"
+      },
+      "category": "agendamento_multiplo",
+      "dialect": "neutro"
+    },
+    {
+      "id": 17,
+      "input": "Eita lasqueira, esqueci meu horário de hoje",
+      "expected_output": {
+        "intent": "query_appointment",
+        "dateRel": "hoje",
+        "action": "query"
+      },
+      "category": "consulta_agendamento",
+      "dialect": "baiano"
+    },
+    {
+      "id": 18,
+      "input": "Ô tia, aceita cartão?",
+      "expected_output": {
+        "intent": "payment",
+        "action": "query"
+      },
+      "category": "consulta_pagamento",
+      "dialect": "baiano"
+    },
+    {
+      "id": 19,
+      "input": "Quero fazer sobrancelha amanhã às 10h da manhã",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "sobrancelha",
+        "dateRel": "amanhã",
+        "timeISO": "10:00",
+        "period": "manhã",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "neutro"
+    },
+    {
+      "id": 20,
+      "input": "Rapaz, tô precisando fazer as unhas urgente!",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "manicure",
+        "action": "create"
+      },
+      "category": "agendamento_urgente",
+      "dialect": "baiano"
+    },
+    {
+      "id": 21,
+      "input": "Bom dia! Vocês fazem extensão de cílios?",
+      "expected_output": {
+        "intent": "service_inquiry",
+        "serviceName": "extensão de cílios",
+        "action": "query"
+      },
+      "category": "consulta_servico",
+      "dialect": "neutro"
+    },
+    {
+      "id": 22,
+      "input": "Danado, quero fazer luzes no cabelo na sexta",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "luzes",
+        "dateRel": "sexta",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "baiano"
+    },
+    {
+      "id": 23,
+      "input": "Oi amor, preciso desmarcar meu horário de terça",
+      "expected_output": {
+        "intent": "cancel",
+        "dateRel": "terça",
+        "action": "cancel"
+      },
+      "category": "cancelamento",
+      "dialect": "baiano"
+    },
+    {
+      "id": 24,
+      "input": "Quero agendar depilação das pernas para depois de amanhã",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "depilação das pernas",
+        "dateRel": "depois de amanhã",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "neutro"
+    },
+    {
+      "id": 25,
+      "input": "Oxe minha irmã, que horas fecha aí?",
+      "expected_output": {
+        "intent": "hours",
+        "action": "query"
+      },
+      "category": "consulta_horarios",
+      "dialect": "baiano"
+    },
+    {
+      "id": 26,
+      "input": "Quero fazer maquiagem para casamento no sábado às 8h",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "maquiagem para casamento",
+        "dateRel": "sábado",
+        "timeISO": "08:00",
+        "action": "create"
+      },
+      "category": "agendamento_evento",
+      "dialect": "neutro"
+    },
+    {
+      "id": 27,
+      "input": "Eita, tô com pressa! Tem horário hoje?",
+      "expected_output": {
+        "intent": "schedule",
+        "dateRel": "hoje",
+        "action": "query"
+      },
+      "category": "consulta_disponibilidade",
+      "dialect": "baiano"
+    },
+    {
+      "id": 28,
+      "input": "Bora fazer unha francesa na quinta à tarde?",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "unha francesa",
+        "dateRel": "quinta",
+        "period": "tarde",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "baiano"
+    },
+    {
+      "id": 29,
+      "input": "Oi querida, quanto tempo demora uma escova?",
+      "expected_output": {
+        "intent": "service_inquiry",
+        "serviceName": "escova",
+        "action": "query"
+      },
+      "category": "consulta_duracao",
+      "dialect": "baiano"
+    },
+    {
+      "id": 30,
+      "input": "Massa demais! Quero fazer relaxamento na segunda às 14h",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "relaxamento",
+        "dateRel": "segunda",
+        "timeISO": "14:00",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "baiano"
+    },
+    {
+      "id": 31,
+      "input": "Preciso mudar meu horário de amanhã para depois de amanhã",
+      "expected_output": {
+        "intent": "reschedule",
+        "dateRel": "amanhã",
+        "action": "modify"
+      },
+      "category": "reagendamento",
+      "dialect": "neutro"
+    },
+    {
+      "id": 32,
+      "input": "Oxente, vocês fazem design de unhas?",
+      "expected_output": {
+        "intent": "service_inquiry",
+        "serviceName": "design de unhas",
+        "action": "query"
+      },
+      "category": "consulta_servico",
+      "dialect": "baiano"
+    },
+    {
+      "id": 33,
+      "input": "Quero fazer botox capilar na sexta de manhã",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "botox capilar",
+        "dateRel": "sexta",
+        "period": "manhã",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "neutro"
+    },
+    {
+      "id": 34,
+      "input": "Ô meu rei, tem desconto para estudante?",
+      "expected_output": {
+        "intent": "price",
+        "action": "query"
+      },
+      "category": "consulta_desconto",
+      "dialect": "baiano"
+    },
+    {
+      "id": 35,
+      "input": "Arretado! Quero fazer penteado para formatura no domingo",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "penteado para formatura",
+        "dateRel": "domingo",
+        "action": "create"
+      },
+      "category": "agendamento_evento",
+      "dialect": "baiano"
+    },
+    {
+      "id": 36,
+      "input": "Bom dia! Gostaria de saber se vocês atendem aos domingos",
+      "expected_output": {
+        "intent": "hours",
+        "dateRel": "domingo",
+        "action": "query"
+      },
+      "category": "consulta_horarios",
+      "dialect": "neutro"
+    },
+    {
+      "id": 37,
+      "input": "Vixe, esqueci de confirmar meu horário de hoje",
+      "expected_output": {
+        "intent": "confirm_appointment",
+        "dateRel": "hoje",
+        "action": "confirm"
+      },
+      "category": "confirmacao",
+      "dialect": "baiano"
+    },
+    {
+      "id": 38,
+      "input": "Quero fazer tratamento para caspa na terça às 16h",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "tratamento para caspa",
+        "dateRel": "terça",
+        "timeISO": "16:00",
+        "action": "create"
+      },
+      "category": "agendamento_tratamento",
+      "dialect": "neutro"
+    },
+    {
+      "id": 39,
+      "input": "Ô tia, vocês fazem atendimento em casa?",
+      "expected_output": {
+        "intent": "service_inquiry",
+        "action": "query"
+      },
+      "category": "consulta_domicilio",
+      "dialect": "baiano"
+    },
+    {
+      "id": 40,
+      "input": "Massa! Quero fazer reflexo no cabelo amanhã de tarde",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "reflexo",
+        "dateRel": "amanhã",
+        "period": "tarde",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "baiano"
+    },
+    {
+      "id": 41,
+      "input": "Preciso fazer limpeza de pele urgente, tem hoje?",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "limpeza de pele",
+        "dateRel": "hoje",
+        "action": "query"
+      },
+      "category": "consulta_urgente",
+      "dialect": "neutro"
+    },
+    {
+      "id": 42,
+      "input": "Oxe, quero fazer micropigmentação de sobrancelha",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "micropigmentação de sobrancelha",
+        "action": "create"
+      },
+      "category": "agendamento_procedimento",
+      "dialect": "baiano"
+    },
+    {
+      "id": 43,
+      "input": "Bora fazer spa dos pés na quinta à noite?",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "spa dos pés",
+        "dateRel": "quinta",
+        "period": "noite",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "baiano"
+    },
+    {
+      "id": 44,
+      "input": "Oi amor, quanto custa uma progressiva?",
+      "expected_output": {
+        "intent": "price",
+        "serviceName": "progressiva",
+        "action": "query"
+      },
+      "category": "consulta_preco",
+      "dialect": "baiano"
+    },
+    {
+      "id": 45,
+      "input": "Quero agendar coloração e corte para sábado de manhã",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "coloração e corte",
+        "dateRel": "sábado",
+        "period": "manhã",
+        "action": "create"
+      },
+      "category": "agendamento_multiplo",
+      "dialect": "neutro"
+    },
+    {
+      "id": 46,
+      "input": "Eita, preciso cancelar tudo hoje",
+      "expected_output": {
+        "intent": "cancel",
+        "dateRel": "hoje",
+        "action": "cancel"
+      },
+      "category": "cancelamento_urgente",
+      "dialect": "baiano"
+    },
+    {
+      "id": 47,
+      "input": "Danado de bom! Quero fazer cauterização na segunda às 15h",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "cauterização",
+        "dateRel": "segunda",
+        "timeISO": "15:00",
+        "action": "create"
+      },
+      "category": "agendamento_tratamento",
+      "dialect": "baiano"
+    },
+    {
+      "id": 48,
+      "input": "Ô querida, vocês fazem pacote noiva?",
+      "expected_output": {
+        "intent": "service_inquiry",
+        "serviceName": "pacote noiva",
+        "action": "query"
+      },
+      "category": "consulta_pacote",
+      "dialect": "baiano"
+    },
+    {
+      "id": 49,
+      "input": "Quero fazer alongamento de unhas na sexta às 17h",
+      "expected_output": {
+        "intent": "schedule",
+        "serviceName": "alongamento de unhas",
+        "dateRel": "sexta",
+        "timeISO": "17:00",
+        "action": "create"
+      },
+      "category": "agendamento_especifico",
+      "dialect": "neutro"
+    },
+    {
+      "id": 50,
+      "input": "Massa demais! Obrigada pelo atendimento!",
+      "expected_output": {
+        "intent": "gratitude",
+        "action": "acknowledge"
+      },
+      "category": "agradecimento",
+      "dialect": "baiano"
+    }
+  ],
+  "categories": {
+    "agendamento_basico": "Agendamentos simples com serviço e data/hora",
+    "agendamento_urgente": "Solicitações de agendamento com urgência",
+    "agendamento_especifico": "Agendamentos com detalhes específicos",
+    "agendamento_formal": "Agendamentos com linguagem formal",
+    "agendamento_multiplo": "Agendamentos com múltiplos serviços",
+    "agendamento_periodo": "Agendamentos com períodos vagos",
+    "agendamento_profissional": "Agendamentos com profissional específico",
+    "agendamento_evento": "Agendamentos para eventos especiais",
+    "agendamento_tratamento": "Agendamentos de tratamentos específicos",
+    "agendamento_procedimento": "Agendamentos de procedimentos estéticos",
+    "consulta_horarios": "Consultas sobre horários de funcionamento",
+    "consulta_preco": "Consultas sobre preços de serviços",
+    "consulta_endereco": "Consultas sobre localização",
+    "consulta_disponibilidade": "Consultas sobre disponibilidade",
+    "consulta_servico": "Consultas sobre serviços oferecidos",
+    "consulta_pagamento": "Consultas sobre formas de pagamento",
+    "consulta_duracao": "Consultas sobre duração de serviços",
+    "consulta_desconto": "Consultas sobre descontos",
+    "consulta_domicilio": "Consultas sobre atendimento domiciliar",
+    "consulta_urgente": "Consultas urgentes sobre disponibilidade",
+    "consulta_pacote": "Consultas sobre pacotes de serviços",
+    "reagendamento": "Solicitações de reagendamento",
+    "cancelamento": "Solicitações de cancelamento",
+    "cancelamento_urgente": "Cancelamentos urgentes",
+    "cadastro_usuario": "Cadastro de novos usuários",
+    "consulta_agendamento": "Consultas sobre agendamentos existentes",
+    "confirmacao": "Confirmações de agendamento",
+    "agradecimento": "Mensagens de agradecimento"
+  },
+  "dialects": {
+    "baiano": "Expressões típicas da Bahia (oxe, eita, vixe, massa, arretado, etc.)",
+    "neutro": "Linguagem padrão sem regionalismos específicos"
+  },
+  "metrics": {
+    "total_cases": 50,
+    "baiano_dialect": 32,
+    "neutro_dialect": 18,
+    "unique_services": 35,
+    "unique_intents": 12
+  }
+}
