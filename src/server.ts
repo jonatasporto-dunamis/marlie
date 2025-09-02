@@ -212,7 +212,7 @@ async function sendWhatsappText(number: string, text: string) {
   const base = String(env.EVOLUTION_BASE_URL).replace(/\/$/, '');
   const url = `${base}/message/sendText/${env.EVOLUTION_INSTANCE}`;
   try {
-    const payload = { number, text, textMessage: { text } }; // inclui ambos formatos
+    const payload = { number, options: { delay: 1200, presence: 'composing' }, textMessage: { text } };
     await axios.post(
       url,
       payload,
