@@ -8,7 +8,32 @@ import jwt from 'jsonwebtoken';
 import { getAllConversationStates } from './db/index';
 
 export const app = express();
+
+// Registro de rotas (compatível com Express 5)
+// Monkey-patch dos métodos de registro para capturar (método, caminho)
+// antes de qualquer definição de rota.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const __routeRegistry: Array<{ method: string; path: string }> = [];
+const __patchMethods = ['get', 'post', 'put', 'patch', 'delete', 'all'] as const;
+for (const m of __patchMethods) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const original = (app as any)[m].bind(app);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (app as any)[m] = (path: any, ...handlers: any[]) => {
+    // Apenas considera como rota quando há handlers (evita capturar app.get('env'))
+    if (typeof path === 'string' && handlers.length > 0) {
+      __routeRegistry.push({ method: m.toUpperCase(), path });
+    }
+    return original(path, ...handlers);
+  };
+}
+
 app.use(express.json({ limit: '1mb' }));
+// Middleware de log de requisições
+app.use((req, _res, next) => {
+  console.log(`[IN] ${req.method} ${req.url}`);
+  next();
+});
 
 // Env validation (relaxed to allow server startup without third-party creds)
 const EnvSchema = z.object({
@@ -59,17 +84,20 @@ function extractTextFromMessage(msg: any): string | undefined {
 
 // Basic healthcheck
 app.get('/health', (_req, res) => {
-  console.log('Healthcheck accessed');
   res.json({ status: 'ok', name: 'Marliê API' });
 });
 
+// Ping simples para diagnosticar
+app.get('/__ping', (_req, res) => res.json({ ok: true, at: 'root' }));
+// Alias extra para diagnosticar matching de rotas independente do método
+app.all('/__ping2', (_req, res) => res.json({ ok: true, at: 'root-2' }));
 // Evolution webhook receiver (incoming WhatsApp messages)
 app.post('/webhooks/evolution', async (req, res) => {
   try {
     const payload = req.body;
 
-    // Log apenas eventos de mensagens recebidas
-    if (payload?.event === 'messages.upsert') {
+    // Log apenas eventos de mensagens recebidas em desenvolvimento
+    if (process.env.NODE_ENV === 'development' && payload?.event === 'messages.upsert') {
       console.log('=== MENSAGEM RECEBIDA ===');
       console.log('Event:', payload?.event);
       console.log('Instance:', payload?.instance);
@@ -84,7 +112,7 @@ app.post('/webhooks/evolution', async (req, res) => {
     let text: string | undefined;
 
     // Formato Evolution API com data wrapper (estrutura real da Evolution)
-    if (payload?.data?.key && payload?.data?.message) {
+    if (payload?.data?.key && typeof payload.data.key === 'object' && payload?.data?.message) {
       number = normalizeNumber(payload.data.key.remoteJid);
       text = extractTextFromMessage(payload.data.message);
     }
@@ -111,20 +139,25 @@ app.post('/webhooks/evolution', async (req, res) => {
     let firstName: string | undefined = undefined;
     
     // Extrair pushName do payload da Evolution API
-    if (payload?.data?.key?.remoteJid) {
-      pushName = payload?.data?.pushName || undefined;
+    if (payload?.data?.key?.remoteJid || payload?.data?.message?.key?.remoteJid) {
+      pushName = payload?.data?.pushName || payload?.data?.message?.pushName || undefined;
       firstName = extractFirstName(pushName);
     }
     
     // Filtrar apenas mensagens recebidas (não enviadas pelo bot)
-    const isIncomingMessage = payload?.event === 'messages.upsert' && payload?.data?.key?.fromMe === false;
+    const rawEvent = payload?.event || payload?.type || (typeof payload?.data?.key === 'string' ? payload.data.key : '');
+    const eventName = String(rawEvent).toLowerCase().replace(/\s+/g, '').replace(/_/g, '.');
+    const isMessagesEvent = eventName.includes('messages.upsert') || eventName.includes('message');
+    const fromMe = (payload?.data?.key && typeof payload.data.key === 'object' && payload?.data?.key?.fromMe === true) ||
+                   (payload?.data?.message?.key?.fromMe === true);
+    const isIncomingMessage = !fromMe && (isMessagesEvent || Boolean(number && text));
     
     console.log('Incoming:', { 
       number, 
       text, 
       pushName, 
       firstName, 
-      event: payload?.event || payload?.type, 
+      event: payload?.event || payload?.type || payload?.data?.key, 
       isIncoming: isIncomingMessage 
     });
 
@@ -139,7 +172,7 @@ app.post('/webhooks/evolution', async (req, res) => {
       if (!clientSession.trinksClientId) {
         const trinksResult = await searchAndUpdateTrinksClient('default', number);
         if (trinksResult.found) {
-          console.log(`Cliente encontrado no Trinks: ${trinksResult.clientData?.name}`);
+          logger.info(`Cliente encontrado no Trinks: ${trinksResult.clientData?.name}`);
           clientSession.trinksClientId = trinksResult.clientData?.id;
           clientSession.clientName = trinksResult.clientData?.name;
           clientSession.clientEmail = trinksResult.clientData?.email;
@@ -177,11 +210,15 @@ async function sendWhatsappText(number: string, text: string) {
   }
   const base = String(env.EVOLUTION_BASE_URL).replace(/\/$/, '');
   const url = `${base}/message/sendText/${env.EVOLUTION_INSTANCE}`;
-  await axios.post(
-    url,
-    { number, text },
-    { headers: { apikey: env.EVOLUTION_API_KEY, 'Content-Type': 'application/json; charset=utf-8' } }
-  );
+  try {
+    await axios.post(
+      url,
+      { number, text },
+      { headers: { apikey: env.EVOLUTION_API_KEY, 'Content-Type': 'application/json; charset=utf-8' } }
+    );
+  } catch (e: any) {
+    console.error('Falha ao enviar mensagem via Evolution API:', e?.response?.data || e?.message || e);
+  }
 }
 
 // Middleware de autenticação
@@ -224,6 +261,9 @@ app.post('/admin/login', (req, res) => {
 });
 
 // Endpoints administrativos protegidos
+app.get('/ping-top', (_req, res) => {
+  res.json({ ok: true, where: 'top' });
+});
 app.get('/admin', authMiddleware, (_req, res) => {
   res.json({
     status: 'ok',
@@ -237,6 +277,10 @@ app.get('/admin', authMiddleware, (_req, res) => {
   });
 });
 
+// Endpoint de diagnóstico após admin para confirmar que execução chegou aqui
+app.get('/ping-after-admin', (_req, res) => {
+  res.json({ ok: true, where: 'after-admin' });
+});
 app.get('/admin/state/:phone', authMiddleware, async (req, res) => {
   try {
     const state = await getConversationState('default', req.params.phone);
@@ -264,8 +308,7 @@ app.get('/admin/states', authMiddleware, async (_req, res) => {
     res.status(500).json({ error: 'Failed to fetch states' });
   }
 });
-
-// Na rota /trinks/agendamentos
+logger.info('Admin routes registered');
 app.post('/trinks/agendamentos', async (req, res) => {
   try {
     const { servicoId, clienteId, dataHoraInicio, duracaoEmMinutos, valor, confirmado, observacoes, profissionalId } = req.body || {};
@@ -363,3 +406,49 @@ if (process.env.NODE_ENV !== 'test') {
     });
   }
 }
+
+// Diagnóstico simples do processo e do router
+app.get('/__whoami', (_req, res) => {
+  try {
+    const anyApp: any = app as any;
+    const stack = anyApp?._router?.stack || [];
+    const routerStackLen = Array.isArray(stack) ? stack.length : 0;
+    res.json({ pid: process.pid, nodeEnv: process.env.NODE_ENV || null, routesCount: __routeRegistry.length, routerStackLen });
+  } catch (e: any) {
+    res.json({ pid: process.pid, nodeEnv: process.env.NODE_ENV || null, error: e?.message || String(e) });
+  }
+});
+
+// Utilitário de debug: logar rotas registradas no startup (apenas em desenvolvimento)
+function logRegisteredRoutes() {
+  if (process.env.NODE_ENV === 'development') {
+    try {
+      console.log('[Debug] Rotas registradas:', __routeRegistry);
+    } catch (e: any) {
+      console.log('[Debug] Falha ao listar rotas:', e?.message || e);
+    }
+  }
+}
+// Chamada imediata para logar rotas após registro das rotas principais
+if (process.env.NODE_ENV === 'development') {
+  setTimeout(logRegisteredRoutes, 1000);
+}
+// Rota de depuração para listar rotas registradas pela aplicação
+app.get('/__routes', (_req, res) => {
+  res.json(__routeRegistry);
+});
+// Diagnóstico: dump de rotas registradas logo após /health
+app.get('/routes-dump', (_req, res) => {
+  try {
+    res.json({ count: __routeRegistry.length, routes: __routeRegistry });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || String(e) });
+  }
+});
+// Catch-all 404 logger
+app.use((req, res, _next) => {
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[404]', req.method, req.url);
+  }
+  res.status(404).json({ error: 'Not Found', path: req.url });
+});

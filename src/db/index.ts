@@ -133,6 +133,7 @@ async function ensureTables() {
   // Adicionar migração para alterar constraints se necessário
   try {
     await pg.query('ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_phone_key');
+    await pg.query('ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_tenant_phone_key');
     await pg.query('ALTER TABLE contacts ADD CONSTRAINT contacts_tenant_phone_key UNIQUE (tenant_id, phone)');
     await pg.query('ALTER TABLE contacts ALTER COLUMN tenant_id SET NOT NULL');
   } catch (e) {
@@ -491,6 +492,7 @@ export async function getServicosSuggestions(
 ): Promise<Array<{ servicoId: number; servicoNome: string; duracaoMin: number; valor: number | null }>> {
   if (!pg) return [];
   const like = `%${term.toLowerCase()}%`;
+  const max = Math.max(1, Math.min(10, limit));
   const q = await pg.query(
     `SELECT servico_id as "servicoId",
             MIN(servico_nome) as "servicoNome",
@@ -500,13 +502,28 @@ export async function getServicosSuggestions(
       WHERE tenant_id = $1
         AND ativo IS TRUE
         AND visivel_cliente IS TRUE
-        AND lower(servico_nome) LIKE $2
+        AND (lower(servico_nome) LIKE $2 OR lower(categoria) LIKE $2)
       GROUP BY servico_id
       ORDER BY MIN(valor) NULLS LAST, MIN(servico_nome)
       LIMIT $3`,
-    [tenantId, like, Math.max(1, Math.min(10, limit))]
+    [tenantId, like, max]
   );
-  return q.rows;
+  if (q.rows.length > 0) return q.rows;
+
+  // Fallback: consultar tabela legada servicos_profissionais_marcleiaabade quando não houver sugestões
+  const q2 = await pg.query(
+    `SELECT servicoid  as "servicoId",
+            nomeservico as "servicoNome",
+            duracaoemminutos as "duracaoMin",
+            preco        as valor
+       FROM servicos_profissionais_marcleiaabade
+      WHERE visivelparacliente IS TRUE
+        AND (lower(nomeservico) LIKE $1 OR lower(categoria) LIKE $1)
+      ORDER BY valor NULLS LAST, nomeservico
+      LIMIT $2`,
+    [like, max]
+  );
+  return q2.rows;
 }
 
 export async function existsServicoInCatalog(

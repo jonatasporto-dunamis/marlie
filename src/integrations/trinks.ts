@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { z } from 'zod';
 import axiosRetry from 'axios-retry';
+import logger from '../utils/logger';
 
 const TrinksEnvSchema = z.object({
   TRINKS_BASE_URL: z.string().url().optional(),
@@ -168,7 +169,7 @@ export const Trinks = {
 
       return { disponivel: true };
     } catch (error) {
-      console.error('Erro ao verificar horário disponível:', error);
+      logger.error('Erro ao verificar horário disponível:', error);
       return { disponivel: false, motivo: 'Erro ao consultar agenda' };
     }
   },
@@ -183,10 +184,15 @@ export const Trinks = {
     observacoes?: string; // opcional
     profissionalId?: number; // opcional
   }) {
-    const client = getClient();
-    const res = await client.post('/v1/agendamentos', data, {
-      headers: { 'content-type': 'application/json' },
-    });
-    return res.data;
+    try {
+      const client = getClient();
+      const res = await client.post('/v1/agendamentos', data, {
+        headers: { 'content-type': 'application/json' },
+      });
+      return res.data;
+    } catch (error) {
+      logger.error('Erro ao criar agendamento:', error);
+      throw error;
+    }
   },
 };
