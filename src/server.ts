@@ -6,6 +6,7 @@ import * as trinks from './integrations/trinks';
 import { initPersistence, setConversationState, getConversationState, recordAppointmentAttempt } from './db/index';
 import jwt from 'jsonwebtoken';
 import { getAllConversationStates } from './db/index';
+import logger from './utils/logger';
 
 export const app = express();
 
