@@ -34,12 +34,12 @@ export default function DashboardPage() {
           headers: { Authorization: `Bearer ${token}` }
         });
         setData(response.data);
-      } catch (error) {
+      } catch (_error) {
         toast({ title: 'Erro', description: 'Falha ao carregar dados.', variant: 'destructive' });
-        if (axios.isAxiosError(error) && error.response?.status === 401) {
-          localStorage.removeItem('token');
-          router.push('/login');
-        }
+          if (axios.isAxiosError(_error) && _error.response?.status === 401) {
+            localStorage.removeItem('token');
+            router.push('/login');
+          }
       } finally {
         setLoading(false);
       }
@@ -47,6 +47,24 @@ export default function DashboardPage() {
 
     fetchData();
   }, [router, toast]);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+
+    const fetchStates = async () => {
+      try {
+        const statesResponse = await axios.get('http://localhost:3000/admin/states', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        setStates(statesResponse.data);
+      } catch (_error) {
+        toast({ title: 'Erro', description: 'Falha ao carregar estados de conversa.', variant: 'destructive' });
+      }
+    };
+
+    fetchStates();
+  }, [toast]);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -109,15 +127,6 @@ export default function DashboardPage() {
 
 type ConversationState = {
   phone: string;
-  state: any;
+  // Removido bloco fora do componente que causava erros de escopo (token, toast, setStates)
+  state: Record<string, unknown>;
 };
-
-// Fetch conversation states
-try {
-  const statesResponse = await axios.get('http://localhost:3000/admin/states', {
-    headers: { Authorization: `Bearer ${token}` }
-  });
-  setStates(statesResponse.data);
-} catch (error) {
-  toast({ title: 'Erro', description: 'Falha ao carregar estados de conversa.', variant: 'destructive' });
-}

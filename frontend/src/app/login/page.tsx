@@ -7,7 +7,7 @@ import axios from 'axios';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
 
 type LoginForm = {
@@ -29,7 +29,7 @@ export default function LoginPage() {
       localStorage.setItem('token', token);
       toast({ title: 'Login bem-sucedido', description: 'Redirecionando para o dashboard.' });
       router.push('/dashboard');
-    } catch (error) {
+    } catch (_error) {
       toast({ title: 'Erro de login', description: 'Credenciais inválidas.', variant: 'destructive' });
     } finally {
       setLoading(false);

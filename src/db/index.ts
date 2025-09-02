@@ -25,7 +25,10 @@ function getLegacyPg(): PgClient | null {
     console.warn('LEGACY_DATABASE_URL not set. Legacy DB access disabled.');
     return null;
   }
-  legacyPg = new PgClient({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  // Ajuste de SSL: somente ativa SSL quando explicitamente configurado
+  const sslMode = String(process.env.LEGACY_DATABASE_SSL || '').trim().toLowerCase();
+  const legacySsl = sslMode === 'no-verify' ? { rejectUnauthorized: false } : (sslMode === 'true' || sslMode === '1' ? true : undefined);
+  legacyPg = new PgClient({ connectionString: url, ssl: legacySsl as any });
   legacyPg.connect().catch((err) => {
     console.error('Failed to connect to legacy database:', err);
     legacyPg = null;
