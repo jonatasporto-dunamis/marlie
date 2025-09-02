@@ -1,8 +1,24 @@
+// Mock logger before any imports
+jest.doMock('../utils/logger', () => ({
+  default: {
+    info: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+    warn: jest.fn()
+  }
+}));
+
 import request from 'supertest';
-import { app } from '../server';
 import jwt from 'jsonwebtoken';
 
 describe('Server Integration Tests', () => {
+  let app: any;
+  
+  beforeAll(async () => {
+    // Import server after mocks are set up
+    const serverModule = await import('../server');
+    app = serverModule.app;
+  });
   test('GET /health should return status ok', async () => {
     const response = await request(app).get('/health');
     expect(response.status).toBe(200);

@@ -471,7 +471,41 @@ const disponibilidade = await trinks.Trinks.verificarHorarioDisponivel({
       // Persistir slots após sucesso em ensureTrinksClientByPhone
       await updateClientSession('default', clientPhone, { sessionData: { ...sessionData, slots: extracted.slots } });
       logger.debug(`Criando agendamento para cliente ${client?.id} em ${iso}`);
-const created = await trinks.Trinks.criarAgendamento({
+
+      // Idempotência: evitar criar agendamentos duplicados
+      const { acquireIdempotencyKey, getIdempotencyResult, setIdempotencyResult } = await import('../db/index');
+      const idemKey = `ag:${clientPhone}:${info.id}:${iso}`;
+      const existing = await getIdempotencyResult<any>(idemKey);
+      if (existing?.id) {
+        const finalSlotsExisting = { ...extracted.slots, nomeServico: serviceName, data: date, hora: time, lastAgendamentoId: existing.id, awaiting: undefined };
+        await setConversationState('default', number || 'unknown', { slots: finalSlotsExisting });
+        await updateClientSession('default', clientPhone, { sessionData: { ...sessionData, slots: finalSlotsExisting } });
+        return `Perfeito! Seu agendamento já estava confirmado:
+
+*Serviço:* ${serviceName}
+*Data:* ${date}
+*Horário:* ${time}
+*ID:* ${existing.id}
+
+Se precisar alterar, me avise.`;
+      }
+      const acquired = await acquireIdempotencyKey(idemKey, 60 * 30);
+      if (!acquired) {
+        const retry = await getIdempotencyResult<any>(idemKey);
+        if (retry?.id) {
+          const finalSlotsRetry = { ...extracted.slots, nomeServico: serviceName, data: date, hora: time, lastAgendamentoId: retry.id, awaiting: undefined };
+          await setConversationState('default', number || 'unknown', { slots: finalSlotsRetry });
+          await updateClientSession('default', clientPhone, { sessionData: { ...sessionData, slots: finalSlotsRetry } });
+          return `Perfeito! Seu agendamento já estava confirmado:
+
+*Serviço:* ${serviceName}
+*Data:* ${date}
+*Horário:* ${time}
+*ID:* ${retry.id}`;
+        }
+      }
+
+      const created = await trinks.Trinks.criarAgendamento({
         servicoId: info.id,
         clienteId: Number(client?.id || client?.clienteId || client?.codigo || 0),
         dataHoraInicio: iso,
@@ -480,36 +514,10 @@ const created = await trinks.Trinks.criarAgendamento({
         confirmado: true,
       });
 
-      // Só confirma o agendamento se recebeu um ID válido da API
-      if (!created?.id) {
-  logger.debug('Agendamento falhou: sem ID retornado');
-        await recordAppointmentAttempt({
-          tenantId: 'default',
-          phone: clientPhone,
-          servicoId: info.id,
-          clienteId: Number(client?.id || client?.clienteId || client?.codigo || 0),
-          dataHoraInicio: iso,
-          duracaoEmMinutos: info.duracaoEmMinutos,
-          valor: info.valor || 0,
-          confirmado: false,
-          observacoes: `Falha ao agendar via WhatsApp - sem ID retornado`,
-          idempotencyKey: `ag:${clientPhone}:${info.id}:${iso}`,
-          trinksPayload: { serviceName, info },
-          trinksResponse: created,
-          trinksAgendamentoId: undefined,
-          status: 'erro',
-        });
-        const updatedSlots = { ...extracted.slots, nomeServico: serviceName, data: date, hora: time, awaiting: undefined };
-        await setConversationState('default', number || 'unknown', { 
-          slots: updatedSlots,
-          messageHistory,
-          contactInfo,
-          etapaAtual: 'erro_agendamento',
-          lastText: text
-        });
-        return 'Ops! Houve um problema ao confirmar seu agendamento. Tente novamente ou entre em contato conosco.';
+      // Persistir resultado idempotente (se houver ID)
+      if (created?.id) {
+        await setIdempotencyResult(idemKey, created, 60 * 30);
       }
-
       await recordAppointmentAttempt({
         tenantId: 'default',
         phone: clientPhone,

@@ -4,6 +4,12 @@ import logger from '../utils/logger';
 
 const LEGACY_FALLBACK_ENABLED = process.env.LEGACY_FALLBACK_ENABLED !== 'false';
 
+// Configurações de TTL
+const CONV_REDIS_TTL_SECONDS = Number(process.env.CONVERSATION_STATE_REDIS_TTL_SECONDS || 60 * 60 * 2); // 2h no Redis
+const CONV_PG_TTL_SECONDS = Number(process.env.CONVERSATION_STATE_PG_TTL_SECONDS || 60 * 60 * 24 * 7); // 7 dias no Postgres
+const RL_LIMIT_PER_MIN = Number(process.env.RL_LIMIT_PER_MIN || 30);
+const RL_LIMIT_PER_HOUR = Number(process.env.RL_LIMIT_PER_HOUR || 400);
+
 export type ConversationState = {
   etapaAtual?: string;
   lastText?: string;
@@ -215,7 +221,8 @@ export async function getOrCreateContactByPhone(
   return { id: inserted.rows[0].id };
 }
 
-const REDIS_TTL_SECONDS = 60 * 60 * 48; // 48h
+// TTL padrão do Redis para estado de conversa (ajustado para 2h)
+const REDIS_TTL_SECONDS = CONV_REDIS_TTL_SECONDS;
 
 export async function setConversationState(tenantId: string, phone: string, state: ConversationState, ttlSeconds = REDIS_TTL_SECONDS) {
   const key = `conv:${tenantId}:${phone}`;
@@ -235,7 +242,7 @@ export async function setConversationState(tenantId: string, phone: string, stat
          state_json = EXCLUDED.state_json,
          updated_at = EXCLUDED.updated_at,
          expires_at = EXCLUDED.expires_at`,
-      [tenantId, contact?.id || null, state.etapaAtual || null, payload, new Date(Date.now() + ttlSeconds * 1000)]
+      [tenantId, contact?.id || null, state.etapaAtual || null, payload, new Date(Date.now() + CONV_PG_TTL_SECONDS * 1000)]
     );
   }
 }
@@ -556,6 +563,18 @@ export async function getServicosSuggestions(
   term: string,
   limit = 5
 ): Promise<Array<{ servicoId: number; servicoNome: string; duracaoMin: number; valor: number | null }>> {
+  // Cache em Redis por termo para acelerar sugestões
+  const cacheKey = `cache:servicos:${tenantId}:${(term || '').toLowerCase()}`;
+  if (redis) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+  }
+
   if (!pg) return [];
   const like = `%${term.toLowerCase()}%`;
   const max = Math.max(1, Math.min(10, limit));
@@ -574,7 +593,12 @@ export async function getServicosSuggestions(
       LIMIT $3`,
     [tenantId, like, max]
   );
-  if (q.rows.length > 0) return q.rows;
+  if (q.rows.length > 0) {
+    if (redis) {
+      try { await redis.set(cacheKey, JSON.stringify(q.rows), { EX: 60 * 60 * 24 }); } catch {}
+    }
+    return q.rows;
+  }
 
   // Fallback: consultar tabela legada servicos_profissionais_marcleiaabade quando não houver sugestões
   if (!LEGACY_FALLBACK_ENABLED) {
@@ -596,6 +620,9 @@ export async function getServicosSuggestions(
         LIMIT $2`,
       [like, max]
     );
+    if (redis) {
+      try { await redis.set(cacheKey, JSON.stringify(q2.rows), { EX: 60 * 60 * 24 }); } catch {}
+    }
     return q2.rows;
   } catch (err) {
     logger.warn('Legacy fallback disabled due to error:', (err as any)?.message || err);
@@ -621,4 +648,77 @@ export async function existsServicoInCatalog(
     [tenantId, servicoId, profissionalId]
   );
   return r.rows.length > 0;
+}
+
+// ===== Redis Helpers: Deduplicação, Rate Limit e Idempotência ===== //
+
+/** Marca uma mensagem como processada usando SET NX. Retorna true se foi a primeira vez. */
+export async function markMessageProcessed(messageId: string, ttlSeconds = 60 * 15): Promise<boolean> {
+  if (!redis || !messageId) return true; // se não há redis, não bloqueia processamento
+  try {
+    const ok = await redis.set(`msg:${messageId}`, '1', { NX: true, EX: ttlSeconds });
+    return ok === 'OK';
+  } catch {
+    return true;
+  }
+}
+
+/** Aplica rate limit por janela. Retorna true se permitido. */
+export async function rateLimitAllow(tenantId: string, phone: string, windowSeconds: number, maxCount: number): Promise<boolean> {
+  if (!redis) return true;
+  const key = `rl:${tenantId}:${phone}:${windowSeconds}`;
+  try {
+    const val = await redis.incr(key);
+    if (val === 1) {
+      await redis.expire(key, windowSeconds);
+    }
+    return val <= maxCount;
+  } catch {
+    return true;
+  }
+}
+
+/** Atalho: aplica limites padrão de 1m e 1h. */
+export async function isRateLimited(tenantId: string, phone: string): Promise<boolean> {
+  const ok1 = await rateLimitAllow(tenantId, phone, 60, RL_LIMIT_PER_MIN);
+  const ok2 = await rateLimitAllow(tenantId, phone, 60 * 60, RL_LIMIT_PER_HOUR);
+  return !(ok1 && ok2);
+}
+
+/** Tenta adquirir chave de idempotência (NX). */
+export async function acquireIdempotencyKey(key: string, ttlSeconds = 60 * 30): Promise<boolean> {
+  if (!redis || !key) return true;
+  try {
+    const ok = await redis.set(`idemp:booking:${key}`, 'inflight', { NX: true, EX: ttlSeconds });
+    return ok === 'OK';
+  } catch {
+    return true;
+  }
+}
+
+/** Define resultado associado à idempotência (por exemplo, ID criado). */
+export async function setIdempotencyResult(key: string, value: any, ttlSeconds = 60 * 30): Promise<void> {
+  if (!redis || !key) return;
+  try {
+    await redis.set(`idemp:booking:${key}:result`, JSON.stringify(value), { EX: ttlSeconds });
+  } catch {}
+}
+
+/** Obtém resultado previamente salvo para idempotência. */
+export async function getIdempotencyResult<T = any>(key: string): Promise<T | null> {
+  if (!redis || !key) return null;
+  try {
+    const raw = await redis.get(`idemp:booking:${key}:result`);
+    return raw ? (JSON.parse(raw) as T) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Libera a chave de idempotência (permite nova tentativa). */
+export async function releaseIdempotencyKey(key: string): Promise<void> {
+  if (!redis || !key) return;
+  try {
+    await redis.del(`idemp:booking:${key}`);
+  } catch {}
 }

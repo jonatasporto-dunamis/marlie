@@ -97,7 +97,6 @@ app.post('/webhooks/evolution', async (req, res) => {
   try {
     const payload = req.body;
 
-    // Log apenas eventos de mensagens recebidas em desenvolvimento
     if (process.env.NODE_ENV === 'development' && payload?.event === 'messages.upsert') {
       console.log('=== MENSAGEM RECEBIDA ===');
       console.log('Event:', payload?.event);
@@ -108,68 +107,79 @@ app.post('/webhooks/evolution', async (req, res) => {
       console.log('========================');
     }
 
-    // Suporta formatos: events by Evolution (ex.: MESSAGES_UPSERT) e payloads genéricos
     let number: string | null = null;
     let text: string | undefined;
+    let messageId: string | undefined;
 
-    // Formato Evolution API com data wrapper (estrutura real da Evolution)
     if (payload?.data?.key && typeof payload.data.key === 'object' && payload?.data?.message) {
       number = normalizeNumber(payload.data.key.remoteJid);
       text = extractTextFromMessage(payload.data.message);
+      messageId = String(payload?.data?.key?.id || payload?.data?.message?.key?.id || payload?.data?.stanzaId || payload?.data?.messageTimestamp || '') || undefined;
     }
-    // Formato Evolution API com data wrapper (estrutura alternativa)
     else if (payload?.data?.message) {
       const msg = payload.data.message;
       number = normalizeNumber(msg?.key?.remoteJid);
       text = extractTextFromMessage(msg?.message || msg);
+      messageId = String(msg?.key?.id || msg?.stanzaId || msg?.messageTimestamp || '') || undefined;
     }
-    // Formato direto com array de mensagens
     else if (Array.isArray(payload?.messages) && payload?.messages[0]) {
       const first = payload.messages[0];
       number = normalizeNumber(first?.key?.remoteJid || first?.from || first?.number);
       text = extractTextFromMessage(first?.message || first);
+      messageId = String(first?.key?.id || first?.id || first?.stanzaId || first?.messageTimestamp || '') || undefined;
     }
-    // Formato direto simples
     else if (payload?.message || payload?.number || payload?.from) {
       number = normalizeNumber(payload?.message?.key?.remoteJid || payload?.number || payload?.from);
       text = extractTextFromMessage(payload?.message || payload);
+      messageId = String(payload?.message?.key?.id || payload?.id || payload?.stanzaId || payload?.messageTimestamp || '') || undefined;
     }
 
-    // Capturar informações do contato
     let pushName: string | undefined = undefined;
     let firstName: string | undefined = undefined;
-    
-    // Extrair pushName do payload da Evolution API
+
     if (payload?.data?.key?.remoteJid || payload?.data?.message?.key?.remoteJid) {
       pushName = payload?.data?.pushName || payload?.data?.message?.pushName || undefined;
       firstName = extractFirstName(pushName);
     }
-    
-    // Filtrar apenas mensagens recebidas (não enviadas pelo bot)
+
     const rawEvent = payload?.event || payload?.type || (typeof payload?.data?.key === 'string' ? payload.data.key : '');
     const eventName = String(rawEvent).toLowerCase().replace(/\s+/g, '').replace(/_/g, '.');
     const isMessagesEvent = eventName.includes('messages.upsert') || eventName.includes('message');
     const fromMe = (payload?.data?.key && typeof payload.data.key === 'object' && payload?.data?.key?.fromMe === true) ||
                    (payload?.data?.message?.key?.fromMe === true);
     const isIncomingMessage = !fromMe && (isMessagesEvent || Boolean(number && text));
-    
+
     console.log('Incoming:', { 
       number, 
       text, 
       pushName, 
       firstName, 
       event: payload?.event || payload?.type || payload?.data?.key, 
-      isIncoming: isIncomingMessage 
+      isIncoming: isIncomingMessage,
+      messageId
     });
 
     if (number && text && isIncomingMessage) {
-      // Buscar ou criar sessão do cliente
-      const { getOrCreateClientSession, searchAndUpdateTrinksClient, getOrCreateContactByPhone } = await import('./db/index');
-      
-      // Criar/atualizar sessão do cliente
+      const { markMessageProcessed, isRateLimited, getOrCreateClientSession, searchAndUpdateTrinksClient, getOrCreateContactByPhone } = await import('./db/index');
+
+      // Deduplicação de mensagens (15 minutos)
+      if (messageId) {
+        const first = await markMessageProcessed(messageId, 60 * 15);
+        if (!first) {
+          console.log('Mensagem duplicada ignorada:', { messageId });
+          return res.status(200).json({ received: true, deduped: true });
+        }
+      }
+
+      // Rate limiting por usuário (1m e 1h)
+      const limited = await isRateLimited('default', number);
+      if (limited) {
+        console.warn('Rate limit atingido, ignorando mensagem:', { number });
+        return res.status(200).json({ received: true, limited: true });
+      }
+
       const clientSession = await getOrCreateClientSession('default', number, { pushName, firstName });
-      
-      // Se é uma nova sessão (sem dados do Trinks), buscar cliente automaticamente
+
       if (!clientSession.trinksClientId) {
         const trinksResult = await searchAndUpdateTrinksClient('default', number);
         if (trinksResult.found) {
@@ -179,10 +189,9 @@ app.post('/webhooks/evolution', async (req, res) => {
           clientSession.clientEmail = trinksResult.clientData?.email;
         }
       }
-      
-      // Manter compatibilidade com sistema antigo
+
       await getOrCreateContactByPhone('default', number, undefined, { pushName, firstName });
-      
+
       const { replyForMessage } = await import('./orchestrator/dialog');
       const answer = await replyForMessage(text, number, { 
         pushName: clientSession.pushName, 
@@ -318,8 +327,8 @@ app.get('/admin/states', authMiddleware, async (_req, res) => {
     console.error('Error fetching states:', error);
     res.status(500).json({ error: 'Failed to fetch states' });
   }
-});
-logger.info('Admin routes registered');
+});  
+// logger.info('Admin routes registered'); // Commented for tests
 
 // Endpoint para sincronizar serviços do Trinks para o catálogo local
 app.post('/admin/sync-servicos', authMiddleware, async (req, res) => {
@@ -376,6 +385,21 @@ app.post('/trinks/agendamentos', async (req, res) => {
     }
 
     const idempotencyKey = `ag:${clienteId}:${servicoId}:${dataHoraInicio}:${profissionalId ?? 'any'}`;
+
+    // Idempotência via Redis
+    const { acquireIdempotencyKey, getIdempotencyResult, setIdempotencyResult, releaseIdempotencyKey } = await import('./db/index');
+    const existing = await getIdempotencyResult<any>(idempotencyKey);
+    if (existing) {
+      return res.json(existing);
+    }
+    const acquired = await acquireIdempotencyKey(idempotencyKey, 60 * 30);
+    if (!acquired) {
+      // Outra requisição concorrente; tente ler resultado salvo
+      const retry = await getIdempotencyResult<any>(idempotencyKey);
+      if (retry) return res.json(retry);
+      return res.status(202).json({ status: 'processing' });
+    }
+
     await recordAppointmentAttempt({
       tenantId: 'default',
       servicoId,
@@ -419,6 +443,9 @@ app.post('/trinks/agendamentos', async (req, res) => {
       status: 'sucesso',
     });
 
+    // Persistir resultado idempotente
+    await setIdempotencyResult(idempotencyKey, created, 60 * 30);
+
     res.json(created);
   } catch (e: any) {
     await recordAppointmentAttempt({
@@ -435,7 +462,7 @@ app.post('/trinks/agendamentos', async (req, res) => {
       trinksPayload: req.body,
       trinksResponse: e?.response?.data,
       status: 'erro',
-    }).catch(() => {});
+    });
     res.status(500).json({ error: 'Falha ao criar agendamento no Trinks' });
   }
 });

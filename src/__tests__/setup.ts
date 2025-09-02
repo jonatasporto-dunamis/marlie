@@ -1,5 +1,11 @@
 // Global test setup
 
+// Set environment variables for tests
+process.env.ADMIN_USER = 'admin';
+process.env.ADMIN_PASS = 'password';
+process.env.JWT_SECRET = 'test_secret';
+process.env.NODE_ENV = 'test';
+
 // Mock Pinecone
 jest.mock('@pinecone-database/pinecone', () => {
   return {
@@ -30,7 +36,15 @@ jest.mock('../db/index', () => {
     updateClientSession: jest.fn().mockResolvedValue(undefined),
     recordAppointmentAttempt: jest.fn().mockResolvedValue(undefined),
     getServicosSuggestions: jest.fn().mockResolvedValue([]),
-    existsServicoInCatalog: jest.fn().mockResolvedValue(true)
+    existsServicoInCatalog: jest.fn().mockResolvedValue(true),
+    addMessageToHistory: jest.fn().mockReturnValue([]),
+    markMessageProcessed: jest.fn().mockResolvedValue(true),
+    rateLimitAllow: jest.fn().mockResolvedValue(true),
+    acquireIdempotencyKey: jest.fn().mockResolvedValue(true),
+    getIdempotencyResult: jest.fn().mockResolvedValue(null),
+    setIdempotencyResult: jest.fn().mockResolvedValue(undefined),
+    releaseIdempotencyKey: jest.fn().mockResolvedValue(undefined),
+    cleanOldMessages: jest.fn().mockResolvedValue(undefined)
   };
 });
 
@@ -56,7 +70,7 @@ jest.mock('../llm/openai', () => {
 // Mock logger
 jest.mock('../utils/logger', () => {
   return {
-    logger: {
+    default: {
       info: jest.fn(),
       error: jest.fn(),
       debug: jest.fn(),
