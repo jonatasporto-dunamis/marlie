@@ -1,7 +1,7 @@
 import { chatCompletion, ChatMessage } from '../llm/openai';
 import * as trinks from '../integrations/trinks';
 import { getConversationState, setConversationState, recordAppointmentAttempt, addMessageToHistory } from '../db/index';
-import { queryRag } from '../utils/rag';
+// import { queryRag } from '../utils/rag'; // Temporariamente desabilitado
 import logger from '../utils/logger';
 
 function normalizeNumber(input?: string): string | null {
@@ -29,7 +29,8 @@ type Extracted = {
 
 export async function extractIntentAndSlots(text: string): Promise<Extracted> {
   logger.debug(`Extraindo intenção e slots para texto: ${text}`);
-  const ragContext = await queryRag('Trinks API endpoints for scheduling and availability');
+  // const ragContext = await queryRag('Trinks API endpoints for scheduling and availability'); // Temporariamente desabilitado
+  const ragContext = 'API Trinks: endpoints para agendamentos, verificação de disponibilidade, busca de clientes e serviços.';
   const system: ChatMessage = {
     role: 'system',
     content:
