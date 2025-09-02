@@ -213,11 +213,13 @@ async function sendWhatsappText(number: string, text: string) {
   const url = `${base}/message/sendText/${env.EVOLUTION_INSTANCE}`;
   try {
     const payload = { number, options: { delay: 1200, presence: 'composing' }, textMessage: { text } };
-    await axios.post(
+    console.log('Evolution sendText request:', { url, number, hasApiKey: Boolean(env.EVOLUTION_API_KEY), instance: env.EVOLUTION_INSTANCE });
+    const resp = await axios.post(
       url,
       payload,
       { headers: { apikey: env.EVOLUTION_API_KEY, 'Content-Type': 'application/json; charset=utf-8' } }
     );
+    console.log('Evolution sendText response:', { status: resp.status, data: resp.data?.status || resp.data });
   } catch (e: any) {
     console.error('Falha ao enviar mensagem via Evolution API:', e?.response?.data || e?.message || e);
   }
