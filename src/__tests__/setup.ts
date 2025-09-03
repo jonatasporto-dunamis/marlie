@@ -58,22 +58,27 @@ jest.mock('../db/index', () => {
   };
 });
 
-// Mock Trinks API
-jest.mock('../integrations/trinks', () => {
-  return {
-    Trinks: {
-      verificarHorarioDisponivel: jest.fn().mockResolvedValue({ disponivel: true }),
-      criarAgendamento: jest.fn().mockResolvedValue({ id: 'test-123' }),
-      buscarClientePorTelefone: jest.fn().mockResolvedValue(null),
-      criarCliente: jest.fn().mockResolvedValue({ id: 'client-123' })
-    }
-  };
-});
+// Trinks API will be mocked in individual test files using axios mock
 
 // Mock chat completion
 jest.mock('../llm/openai', () => {
   return {
-    chatCompletion: jest.fn().mockResolvedValue('Resposta de teste do assistente')
+    chatCompletion: jest.fn().mockImplementation((messages) => {
+      const userMessage = messages.find((m: any) => m.role === 'user')?.content || '';
+      
+      // Mock para extractIntentAndSlots
+      if (userMessage.includes('agendar') || userMessage.includes('corte de cabelo')) {
+        return Promise.resolve(JSON.stringify({
+          intent: 'agendar',
+          serviceName: 'corte de cabelo',
+          dateRel: 'amanhã',
+          timeISO: '10:00'
+        }));
+      }
+      
+      // Mock padrão para outras funções
+      return Promise.resolve('Resposta de teste do assistente');
+    })
   };
 });
 

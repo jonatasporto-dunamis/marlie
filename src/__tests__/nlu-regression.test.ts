@@ -118,16 +118,16 @@ describe('NLU Regression Tests', () => {
               expect(result.serviceName).toBe(testCase.expected_output.serviceName);
             }
             if (testCase.expected_output.dateRel) {
-              expect(result.date).toBe(testCase.expected_output.dateRel);
+              expect(result.dateRel || result.dateISO).toBe(testCase.expected_output.dateRel);
             }
             if (testCase.expected_output.timeISO) {
-              expect(result.time).toBe(testCase.expected_output.timeISO);
+              expect(result.timeISO).toBe(testCase.expected_output.timeISO);
             }
             if (testCase.expected_output.name) {
-              expect(result.name).toBe(testCase.expected_output.name);
+              expect(result.slots?.name).toBe(testCase.expected_output.name);
             }
             if (testCase.expected_output.phone) {
-              expect(result.phone).toBe(testCase.expected_output.phone);
+              expect(result.slots?.phone).toBe(testCase.expected_output.phone);
             }
           });
         });
@@ -211,7 +211,7 @@ describe('NLU Regression Tests', () => {
       it(`should extract service "${expected}" from "${input}"`, async () => {
         const { chatCompletion } = require('../llm/openai');
         chatCompletion.mockResolvedValueOnce(JSON.stringify({
-          intent: 'schedule',
+          intent: 'agendar',
           serviceName: expected
         }));
 
@@ -259,8 +259,8 @@ describe('NLU Regression Tests', () => {
         chatCompletion.mockResolvedValueOnce(JSON.stringify(mockResponse));
 
         const result = await extractIntentAndSlots(input);
-        expect(result.date).toBe(expectedDate);
-        if (expectedTime) expect(result.time).toBe(expectedTime);
+        expect(result.dateRel || result.dateISO).toBe(expectedDate);
+        if (expectedTime) expect(result.timeISO).toBe(expectedTime);
       });
     });
   });
@@ -271,7 +271,7 @@ describe('NLU Regression Tests', () => {
       chatCompletion.mockRejectedValueOnce(new Error('API Error'));
 
       const result = await extractIntentAndSlots('test input');
-      expect(result.intent).toBe('other');
+      expect(result.intent).toBe('outros');
     });
 
     it('should handle invalid JSON responses', async () => {
@@ -279,7 +279,7 @@ describe('NLU Regression Tests', () => {
       chatCompletion.mockResolvedValueOnce('invalid json response');
 
       const result = await extractIntentAndSlots('test input');
-      expect(result.intent).toBe('other');
+      expect(result.intent).toBe('outros');
     });
 
     it('should handle empty responses', async () => {
@@ -287,14 +287,14 @@ describe('NLU Regression Tests', () => {
       chatCompletion.mockResolvedValueOnce('');
 
       const result = await extractIntentAndSlots('');
-      expect(result.intent).toBe('other');
+      expect(result.intent).toBe('outros');
     });
   });
 
   describe('Performance Tests', () => {
     it('should process multiple requests within acceptable time', async () => {
       const { chatCompletion } = require('../llm/openai');
-      chatCompletion.mockResolvedValue(JSON.stringify({ intent: 'schedule' }));
+      chatCompletion.mockResolvedValue(JSON.stringify({ intent: 'agendar' }));
 
       const startTime = Date.now();
       const promises = Array(10).fill(0).map(() => 
@@ -315,7 +315,7 @@ describe('NLU Regression Tests', () => {
       {
         input: 'oxe, quero fazer unha',
         description: 'Bahian expression with service request',
-        expectedIntent: 'schedule'
+        expectedIntent: 'agendar'
       },
       {
         input: 'eita, preciso cancelar',

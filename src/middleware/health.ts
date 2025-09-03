@@ -1,8 +1,6 @@
 import { Request, Response } from 'express';
-import { Pool } from 'pg';
-import { createClient } from 'redis';
-import axios from 'axios';
 import logger from '../utils/logger';
+import { performHealthChecks, performReadinessCheck } from '../health/checks';
 
 interface HealthCheck {
   status: 'healthy' | 'unhealthy' | 'degraded';
@@ -179,69 +177,62 @@ function determineOverallStatus(checks: HealthStatus['checks']): 'healthy' | 'un
 }
 
 // Handler para /health
-export const healthHandler = async (req: Request, res: Response) => {
+export async function healthHandler(req: Request, res: Response) {
   try {
-    const checks = {
-      database: await checkDatabase(),
-      redis: await checkRedis(),
-      evolution: await checkEvolution(),
-      trinks: await checkTrinks()
-    };
-
-    const overallStatus = determineOverallStatus(checks);
+    const healthStatus = await performHealthChecks();
     
-    const healthStatus: HealthStatus = {
-      status: overallStatus,
-      timestamp: new Date().toISOString(),
+    const httpStatus = healthStatus.status === 'healthy' ? 200 : 
+                      healthStatus.status === 'degraded' ? 200 : 503;
+    
+    // Add additional system info
+    const response = {
+      ...healthStatus,
       uptime: process.uptime(),
       version: process.env.npm_package_version || '1.0.0',
-      checks
+      node_version: process.version,
+      memory_usage: process.memoryUsage()
     };
-
-    const statusCode = overallStatus === 'healthy' ? 200 : 
-                      overallStatus === 'degraded' ? 200 : 503;
-
-    res.status(statusCode).json(healthStatus);
+    
+    res.status(httpStatus).json(response);
   } catch (error) {
-    logger.error('Health check failed', { error });
+    logger.error('Health check failed:', error);
     res.status(503).json({
       status: 'unhealthy',
       timestamp: new Date().toISOString(),
-      message: 'Health check failed',
-      error: error instanceof Error ? error.message : 'Unknown error'
+      uptime: process.uptime(),
+      version: process.env.npm_package_version || '1.0.0',
+      error: 'Health check system failure',
+      checks: {
+        database: { status: 'unhealthy', timestamp: new Date().toISOString(), duration_ms: 0, error: 'System error' },
+        redis: { status: 'unhealthy', timestamp: new Date().toISOString(), duration_ms: 0, error: 'System error' },
+        evolution: { status: 'unhealthy', timestamp: new Date().toISOString(), duration_ms: 0, error: 'System error' },
+        trinks: { status: 'unhealthy', timestamp: new Date().toISOString(), duration_ms: 0, error: 'System error' }
+      },
+      overall_duration_ms: 0
     });
   }
-};
+}
 
 // Handler para /ready (readiness probe)
-export const readyHandler = async (req: Request, res: Response) => {
+export async function readyHandler(req: Request, res: Response) {
   try {
-    // Para readiness, apenas verificamos serviços críticos
-    const databaseCheck = await checkDatabase();
+    const readinessStatus = await performReadinessCheck();
     
-    if (databaseCheck.status === 'unhealthy') {
-      return res.status(503).json({
-        status: 'not_ready',
-        timestamp: new Date().toISOString(),
-        message: 'Database not available',
-        checks: {
-          database: databaseCheck
-        }
-      });
-    }
-
-    res.status(200).json({
-      status: 'ready',
-      timestamp: new Date().toISOString(),
-      message: 'Service is ready to accept traffic'
-    });
+    const response = {
+      ...readinessStatus,
+      uptime: process.uptime(),
+      version: process.env.npm_package_version || '1.0.0'
+    };
+    
+    res.status(readinessStatus.ready ? 200 : 503).json(response);
   } catch (error) {
-    logger.error('Readiness check failed', { error });
+    logger.error('Readiness check failed:', error);
     res.status(503).json({
-      status: 'not_ready',
+      ready: false,
       timestamp: new Date().toISOString(),
-      message: 'Readiness check failed',
-      error: error instanceof Error ? error.message : 'Unknown error'
+      uptime: process.uptime(),
+      duration_ms: 0,
+      error: 'Readiness check system failure'
     });
   }
-};
+}

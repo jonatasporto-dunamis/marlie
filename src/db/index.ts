@@ -576,8 +576,25 @@ export async function upsertServicosProf(
   items: Array<{ servicoId: number; servicoNome: string; duracaoMin: number; valor?: number | null; profissionalId?: number | null; visivelCliente?: boolean | null; ativo?: boolean | null }>
 ): Promise<void> {
   if (!pg || !items || items.length === 0) return;
+  
+  // Normalizar e deduplicar itens antes da inserção
+  const normalizedItems = new Map<string, typeof items[0]>();
+  
   for (const it of items) {
     const profissionalId = it.profissionalId ?? 0;
+    const normalizedNome = it.servicoNome.trim().toLowerCase();
+    const dedupeKey = `${tenantId}:${normalizedNome}:${profissionalId}`;
+    
+    // Manter apenas o último item para cada chave de dedupe
+    normalizedItems.set(dedupeKey, {
+      ...it,
+      servicoNome: normalizedNome,
+      profissionalId
+    });
+  }
+  
+  // Inserir itens normalizados
+  for (const it of normalizedItems.values()) {
     await pg.query(
       `INSERT INTO servicos_prof (tenant_id, servico_id, servico_nome, duracao_min, valor, profissional_id, visivel_cliente, ativo, last_synced_at)
        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7, TRUE), COALESCE($8, TRUE), now())
@@ -588,7 +605,7 @@ export async function upsertServicosProf(
                      visivel_cliente = EXCLUDED.visivel_cliente,
                      ativo = EXCLUDED.ativo,
                      last_synced_at = now()`,
-      [tenantId, it.servicoId, it.servicoNome, it.duracaoMin, it.valor ?? null, profissionalId, it.visivelCliente ?? true, it.ativo ?? true]
+      [tenantId, it.servicoId, it.servicoNome, it.duracaoMin, it.valor ?? null, it.profissionalId, it.visivelCliente ?? true, it.ativo ?? true]
     );
   }
 }

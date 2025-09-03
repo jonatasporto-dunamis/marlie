@@ -4,21 +4,26 @@
 O sistema de NLU (Natural Language Understanding) deve extrair informações estruturadas de mensagens de usuários em português brasileiro, especificamente com variações da Bahia.
 
 ## Formato de Resposta
-**IMPORTANTE**: O NLU deve retornar **SOMENTE JSON** válido, sem texto adicional para o usuário.
+**CRÍTICO**: O NLU deve retornar **EXCLUSIVAMENTE JSON** válido, sem qualquer texto adicional, explicação ou formatação markdown.
 
 ### Schema JSON Obrigatório
 ```json
 {
-  "intent": "string", // obrigatório
-  "serviceName": "string?", // opcional
-  "dateRel": "string?", // opcional - termos relativos como "amanhã", "hoje"
-  "dateISO": "string?", // opcional - formato YYYY-MM-DD
-  "period": "string?", // opcional - "manhã", "tarde", "noite"
-  "timeISO": "string?", // opcional - formato HH:MM
-  "professionalName": "string?", // opcional
-  "action": "string?" // opcional - "remarcar", "cancelar", "preço", "endereço"
+  "intent": "string",
+  "serviceName": "string",
+  "dateRel": "string",
+  "dateISO": "string",
+  "period": "string",
+  "timeISO": "string",
+  "professionalName": "string"
 }
 ```
+
+**REGRAS DE SCHEMA**:
+- Todos os campos são opcionais EXCETO `intent`
+- Omitir campos não identificados (não incluir null/undefined)
+- JSON deve ser válido e parseável
+- Sem comentários no JSON de resposta
 
 ### Intents Principais
 - `agendar` - usuário quer agendar um serviço
@@ -105,6 +110,42 @@ O sistema de NLU (Natural Language Understanding) deve extrair informações est
 }
 ```
 
+**Entrada**: "Oxe, dá pra entre 14 e 15?"
+**Saída**:
+```json
+{
+  "intent": "agendar",
+  "timeISO": "14:00"
+}
+```
+
+**Entrada**: "Beleza, lá pras 16h tá massa"
+**Saída**:
+```json
+{
+  "intent": "confirmar",
+  "timeISO": "16:00"
+}
+```
+
+**Entrada**: "Num rola cedim não, mais tardinha"
+**Saída**:
+```json
+{
+  "intent": "negar",
+  "period": "tarde"
+}
+```
+
+**Entrada**: "Eita, depois do almoço pode ser?"
+**Saída**:
+```json
+{
+  "intent": "agendar",
+  "period": "tarde"
+}
+```
+
 ### Consultas
 **Entrada**: "Qual valor da cutilagem?"
 **Saída**:
@@ -154,13 +195,34 @@ O sistema de NLU (Natural Language Understanding) deve extrair informações est
 ```
 
 ## Variações Regionais (Bahia)
-- "cedinho" = manhã cedo
-- "finalzinho" = final do período
+### Expressões Temporais
+- "cedinho" / "cedim" = manhã cedo (period: "manhã")
+- "finalzinho" / "finalzim" = final do período
 - "mais pra" = aproximadamente
-- "tá bom" = confirmação
-- "dá pra" = é possível
-- "oxe" = expressão de surpresa (ignorar)
-- "vixe" = expressão de preocupação (ignorar)
+- "noitinha" / "noitim" = início da noite
+- "tardinha" / "tardim" = final da tarde
+- "entre X e Y" = faixa de horário
+- "lá pras" = aproximadamente (ex: "lá pras 14h")
+- "ali pelas" = aproximadamente
+- "depois do almoço" = tarde
+- "antes do almoço" = manhã
+
+### Confirmações e Negações
+- "tá bom" / "tá certo" = confirmação
+- "dá pra" / "dá pra ser" = é possível
+- "pode ser" = confirmação
+- "beleza" / "blz" = confirmação
+- "massa" = confirmação
+- "não rola" / "num rola" = negação
+- "não dá" / "num dá" = negação
+
+### Expressões Regionais (ignorar)
+- "oxe" / "oxente" = surpresa
+- "vixe" / "vish" = preocupação
+- "eita" = surpresa
+- "rapaz" / "meu rei" / "minha fia" = vocativos
+- "sô" = contração de "senhor"
+- "véi" = "velho" (amigo)
 
 ## Regras Importantes
 1. **Sempre retornar JSON válido**

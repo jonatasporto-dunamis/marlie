@@ -5,6 +5,7 @@ import { getConversationState, setConversationState, recordAppointmentAttempt, a
 import logger from '../utils/logger';
 import { incrementConversationsStarted, incrementServiceSuggestions, incrementBookingsConfirmed, incrementTrinksErrors } from '../middleware/metrics';
 import { suggestProactiveTimeSlots, parseRelativeDateTime, detectShortcuts, convertRelativeDateToISO } from '../utils/proactive-scheduling';
+import { resolveCompleteDateTime, combineDateAndTime, formatDateBR, formatTimeBR, isPastDateTime } from '../utils/date-resolver';
 import { processShortcut, processShortcutFollowUp } from '../utils/shortcuts';
 import { recommendSlots, RecommendedSlot } from '../utils/recommendation-engine';
 import { generateBookingSummary, generatePostBookingCTAs as generateComplementaryCTAs, processCTAResponse } from '../utils/post-booking-templates';
@@ -21,18 +22,15 @@ function normalizeNumber(input?: string): string | null {
 }
 
 type Extracted = {
-  intent: 'faq' | 'hours' | 'create_user' | 'schedule' | 'other';
-  question?: string;
-  // cadastro
-  name?: string;
-  phone?: string;
-  email?: string;
-  // agendamento
+  intent: 'agendar' | 'remarcar' | 'cancelar' | 'consultar_preco' | 'consultar_endereco' | 'confirmar' | 'negar' | 'saudacao' | 'outros';
   serviceName?: string;
-  date?: string; // preferencialmente ISO ou "aaaa-mm-dd"
-  time?: string; // preferencialmente HH:mm
+  dateRel?: string; // termos relativos como "amanhã", "hoje"
+  dateISO?: string; // formato YYYY-MM-DD
+  period?: string; // "manhã", "tarde", "noite"
+  timeISO?: string; // formato HH:MM
   professionalName?: string;
-  // slots persistentes
+  action?: string; // "remarcar", "cancelar", "preço", "endereço"
+  // slots persistentes para compatibilidade
   slots?: any;
 };
 
@@ -42,31 +40,64 @@ export async function extractIntentAndSlots(text: string): Promise<Extracted> {
   const ragContext = 'API Trinks: endpoints para agendamentos, verificação de disponibilidade, busca de clientes e serviços.';
   const system: ChatMessage = {
     role: 'system',
-    content:
-      'Você é Marliê, assistente do Ateliê Marcleia Abade. Extraia intenção e slots do usuário e responda APENAS em JSON válido. Campos: intent (faq|hours|create_user|schedule|other), question, name, phone, email, serviceName, date (ISO ou aaaa-mm-dd), time (HH:mm), professionalName.\n\nContexto da API Trinks: ' + ragContext + '\n\nExemplos:\nUser: Quero agendar manicure -> {"intent": "schedule", "serviceName": "manicure"}\nUser: Qual o horário de funcionamento? -> {"intent": "hours"}\nUser: Me cadastrar com nome João -> {"intent": "create_user", "name": "João"}\nUser: Agendar corte de cabelo amanhã às 14h -> {"intent": "schedule", "serviceName": "corte de cabelo", "date": "amanhã", "time": "14:00"}\nGaranta que o output seja JSON puro sem texto adicional.'
+    content: `Você é Marliê, assistente do Ateliê Marcleia Abade. Extraia informações estruturadas de mensagens em português brasileiro (variações da Bahia) e responda APENAS em JSON válido.
+
+Schema JSON obrigatório:
+{
+  "intent": "string", // obrigatório: agendar|remarcar|cancelar|consultar_preco|consultar_endereco|confirmar|negar|saudacao|outros
+  "serviceName": "string?", // opcional: cutilagem, esmaltação, progressiva, design de sobrancelha, manicure, pedicure, hidratação, escova, corte, coloração, luzes, babyliss, chapinha
+  "dateRel": "string?", // opcional: termos relativos como "amanhã", "hoje", "segunda"
+  "dateISO": "string?", // opcional: formato YYYY-MM-DD
+  "period": "string?", // opcional: "manhã", "tarde", "noite"
+  "timeISO": "string?", // opcional: formato HH:MM
+  "professionalName": "string?", // opcional
+  "action": "string?" // opcional: "remarcar", "cancelar", "preço", "endereço"
+}
+
+Mapeamento de períodos:
+- manhã: 09:00-12:00
+- tarde: 13:30-17:30
+- noite: 18:00-20:00
+
+Variações regionais (Bahia):
+- "cedinho" = manhã cedo
+- "finalzinho" = final do período
+- "mais pra" = aproximadamente
+- "tá bom" = confirmação
+- "dá pra" = é possível
+
+Exemplos:
+"Quero fazer uma cutilagem amanhã de tarde" -> {"intent": "agendar", "serviceName": "cutilagem", "dateRel": "amanhã", "period": "tarde"}
+"Dá pra amanhã às 14:30?" -> {"intent": "agendar", "dateRel": "amanhã", "timeISO": "14:30"}
+"Qual valor da cutilagem?" -> {"intent": "consultar_preco", "serviceName": "cutilagem"}
+"Quero remarcar" -> {"intent": "remarcar", "action": "remarcar"}
+"Finalzinho da tarde tá bom" -> {"intent": "confirmar", "period": "tarde"}
+
+Contexto da API Trinks: ${ragContext}
+
+RETORNE APENAS JSON VÁLIDO SEM TEXTO ADICIONAL.`
   };
   const user: ChatMessage = { role: 'user', content: text };
   let raw = '';
   try {
     raw = await chatCompletion([system, user]);
   } catch {
-    return { intent: 'other' };
+    return { intent: 'outros' };
   }
   try {
     const parsed = JSON.parse(raw);
     return {
-      intent: parsed.intent || 'other',
-      question: parsed.question,
-      name: parsed.name,
-      phone: parsed.phone,
-      email: parsed.email,
+      intent: parsed.intent || 'outros',
       serviceName: parsed.serviceName,
-      date: parsed.date,
-      time: parsed.time,
+      dateRel: parsed.dateRel,
+      dateISO: parsed.dateISO,
+      period: parsed.period,
+      timeISO: parsed.timeISO,
       professionalName: parsed.professionalName,
+      action: parsed.action,
     } as Extracted;
   } catch {
-    return { intent: 'other' };
+    return { intent: 'outros' };
   }
 }
 
@@ -154,17 +185,12 @@ async function resolveServiceInfoByName(nameLike: string): Promise<{ id: number;
   }
 }
 
-function combineDateTime(date?: string, time?: string): string | null {
-  if (!date || !time) return null;
-  const d = new Date(`${date}T${time}:00`);
-  if (isNaN(d.getTime())) return null;
-  return d.toISOString();
-}
+// Função removida - agora usando combineDateAndTime do date-resolver
 
 type SchedulingState = 'initial' | 'collecting_service' | 'collecting_date' | 'collecting_time' | 'verifying_availability' | 'confirming' | 'done' | 'error';
 
 export async function replyForMessage(text: string, phoneNumber?: string, contactInfo?: { pushName?: string; firstName?: string; clientSession?: any }): Promise<string> {
-  logger.debug(`Processando mensagem de ${phoneNumber}: ${text}`);
+  // logger.debug(`Processando mensagem de ${phoneNumber}: ${text}`);
   const number = normalizeNumber(phoneNumber) || undefined;
   const currentState = number ? await getConversationState('default', number) : null;
   let currentSchedulingState: SchedulingState = (currentState?.etapaAtual as SchedulingState) || 'initial';
@@ -187,7 +213,7 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
   
   // Se há slots de agendamento em andamento, manter contexto
   if (persistentSlots.nomeServico || persistentSlots.data || persistentSlots.hora) {
-    logger.debug('Contexto de agendamento detectado:', persistentSlots);
+    // logger.debug('Contexto de agendamento detectado:', persistentSlots);
   }
   
   const sessionData = {
@@ -313,20 +339,20 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
   
   // Atualizar slots com dados extraídos
   if (extracted.serviceName) extracted.slots.nomeServico = extracted.serviceName;
-  if (extracted.date) extracted.slots.data = extracted.date;
-  if (extracted.time) extracted.slots.hora = extracted.time;
-  if (extracted.name) extracted.slots.nome = extracted.name;
-  if (extracted.phone) extracted.slots.telefone = extracted.phone;
+  if (extracted.dateRel || extracted.dateISO) extracted.slots.data = extracted.dateRel || extracted.dateISO;
+  if (extracted.timeISO) extracted.slots.hora = extracted.timeISO;
+  if (extracted.slots?.name) extracted.slots.nome = extracted.slots.name;
+  if (extracted.slots?.phone) extracted.slots.telefone = extracted.slots.phone;
 
   // 2) Se havia um slot aguardando, prioriza interpretação direta do texto
   const awaiting = slots.awaiting as string | undefined;
   if (awaiting) {
     switch (awaiting) {
       case 'name':
-        extracted = { intent: 'create_user', name: text, phone: extracted.phone } as Extracted;
+        extracted = { intent: 'outros', slots: { ...extracted.slots, name: text, phone: extracted.slots?.phone } } as Extracted;
         break;
       case 'phone':
-        extracted = { intent: 'create_user', name: extracted.name || slots.name, phone: text } as Extracted;
+        extracted = { intent: 'outros', slots: { ...extracted.slots, name: extracted.slots?.name || slots.name, phone: text } } as Extracted;
         break;
       case 'serviceName': {
         // Permitir o usuário digitar o número da sugestão
@@ -339,31 +365,31 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
           if (chosen) {
             const newSlots = { ...slots, nomeServico: chosen.nome, servicoSelecionado: chosen, serviceSuggestions: undefined } as any;
             await setConversationState('default', number || 'unknown', { slots: newSlots, etapaAtual: currentSchedulingState });
-            extracted = { intent: 'schedule', serviceName: chosen.nome, date: extracted.date, time: extracted.time } as Extracted;
+            extracted = { intent: 'agendar', serviceName: chosen.nome, dateRel: extracted.dateRel, timeISO: extracted.timeISO } as Extracted;
             break;
           }
         }
         // Caso contrário, trata como nome livre
-        extracted = { intent: 'schedule', serviceName: text, date: extracted.date, time: extracted.time } as Extracted;
+        extracted = { intent: 'agendar', serviceName: text, dateRel: extracted.dateRel, timeISO: extracted.timeISO } as Extracted;
         break;
       }
       case 'date':
-        extracted = { intent: 'schedule', serviceName: extracted.serviceName || slots.serviceName, date: text, time: extracted.time } as Extracted;
+        extracted = { intent: 'agendar', serviceName: extracted.serviceName || slots.serviceName, dateRel: text, timeISO: extracted.timeISO } as Extracted;
         break;
       case 'time':
-        extracted = { intent: 'schedule', serviceName: extracted.serviceName || slots.serviceName, date: extracted.date || slots.date, time: text } as Extracted;
+        extracted = { intent: 'agendar', serviceName: extracted.serviceName || slots.serviceName, dateRel: extracted.dateRel || slots.date, timeISO: text } as Extracted;
         break;
     }
   }
 
-  if (extracted.intent === 'hours') {
+  if (extracted.intent === 'consultar_endereco') {
     const greeting = contactInfo?.firstName ? `${contactInfo.firstName}, funcionamos` : 'Funcionamos';
     return `${greeting} de terça a sábado, das 10h às 19h. Como posso ajudar no seu atendimento hoje?`;
   }
 
-  if (extracted.intent === 'create_user') {
-    const name = extracted.name || slots.name;
-    const phone = normalizeNumber(extracted.phone || number || slots.phone || '');
+  if (extracted.slots?.name || extracted.slots?.phone) {
+    const name = extracted.slots?.name || slots.name;
+    const phone = normalizeNumber(extracted.slots?.phone || number || slots.phone || '');
     if (!name) {
       await setConversationState('default', number || 'unknown', { slots: { ...slots, awaiting: 'name' } });
       const greeting = contactInfo?.firstName ? `Claro, ${contactInfo.firstName}!` : 'Claro!';
@@ -379,17 +405,17 @@ export async function replyForMessage(text: string, phoneNumber?: string, contac
       const greeting = contactInfo?.firstName ? `${contactInfo.firstName}, seu cadastro` : 'Cadastro';
       return `${greeting} foi localizado/criado com sucesso! Posso te ajudar com agendamento agora?`;
     } catch (e: any) {
-      logger.error('Erro ao criar usuário:', e);
-      logger.debug(`Falha no cadastro para telefone ${phone}`);
+      // logger.error('Erro ao criar usuário:', e);
+    // logger.debug(`Falha no cadastro para telefone ${phone}`);
       return 'Tive um problema para criar seu cadastro. Pode tentar novamente em instantes, por favor?';
     }
   }
 
-  if (extracted.intent === 'schedule' || currentSchedulingState !== 'initial') {
+  if (extracted.intent === 'agendar' || currentSchedulingState !== 'initial') {
     const serviceName = extracted.slots?.nomeServico || extracted.serviceName;
-const date = extracted.slots?.data || extracted.date;
-const time = extracted.slots?.hora || extracted.time;
-logger.debug(`Estado atual da FSM: ${currentSchedulingState}`);
+const date = extracted.slots?.data || extracted.dateRel || extracted.dateISO;
+const time = extracted.slots?.hora || extracted.timeISO;
+// logger.debug(`Estado atual da FSM: ${currentSchedulingState}`);
 switch (currentSchedulingState) {
       case 'initial':
         currentSchedulingState = 'collecting_service';
@@ -440,7 +466,7 @@ switch (currentSchedulingState) {
         break;
     }
 
-    logger.debug('Agendamento - Slots atuais:', { serviceName, date, time });
+    // logger.debug('Agendamento - Slots atuais:', { serviceName, date, time });
 
     if (!serviceName) {
       const updatedSlots = { ...extracted.slots, awaiting: 'serviceName' };
@@ -626,7 +652,7 @@ switch (currentSchedulingState) {
             }
           }
         } catch (error) {
-          logger.error('Erro ao sugerir horários proativos:', error);
+          // logger.error('Erro ao sugerir horários proativos:', error);
         }
       }
       
@@ -641,7 +667,8 @@ switch (currentSchedulingState) {
       return 'E qual horário prefere? (ex: 14:30)';
     }
 
-    const iso = combineDateTime(date, time);
+    const dateTime = combineDateAndTime(date, time);
+    const iso = dateTime.toISO();
     if (!iso) {
       const updatedSlots = { ...extracted.slots, nomeServico: serviceName, data: date, awaiting: 'time' };
       await setConversationState('default', number || 'unknown', { 
@@ -654,7 +681,7 @@ switch (currentSchedulingState) {
       return 'Não consegui interpretar data/horário. Poderia me confirmar o horário? (ex: 14:30)';
     }
 
-    const clientPhone = number || normalizeNumber(extracted.phone || '') || undefined;
+    const clientPhone = number || normalizeNumber(extracted.slots?.phone || '') || undefined;
     if (!clientPhone) {
       const updatedSlots = { ...extracted.slots, nomeServico: serviceName, data: date, hora: time, awaiting: 'phone' };
       await setConversationState('default', 'unknown', { 
@@ -693,7 +720,7 @@ switch (currentSchedulingState) {
       }
 
       // Primeiro, verificar se o horário está disponível
-      logger.debug(`Verificando disponibilidade para serviço ${info.id} em ${date} ${time}`);
+      // logger.debug(`Verificando disponibilidade para serviço ${info.id} em ${date} ${time}`);
 const disponibilidade = await trinks.Trinks.verificarHorarioDisponivel({
         data: date,
         hora: time,
@@ -722,7 +749,7 @@ const disponibilidade = await trinks.Trinks.verificarHorarioDisponivel({
       const client = await ensureTrinksClientByPhone(clientPhone);
       // Persistir slots após sucesso em ensureTrinksClientByPhone
       await updateClientSession('default', clientPhone, { sessionData: { ...sessionData, slots: extracted.slots } });
-      logger.debug(`Criando agendamento para cliente ${client?.id} em ${iso}`);
+      // logger.debug(`Criando agendamento para cliente ${client?.id} em ${iso}`);
 
       // Idempotência: evitar criar agendamentos duplicados
       const { acquireIdempotencyKey, getIdempotencyResult, setIdempotencyResult } = await import('../db/index');
@@ -787,9 +814,9 @@ Se precisar alterar, me avise.`;
             undefined
           );
           
-          logger.info(`Notificações de pré-visita agendadas para agendamento ${created.id}`);
-        } catch (notificationError) {
-          logger.error('Erro ao agendar notificações de pré-visita:', notificationError);
+          // logger.info(`Notificações de pré-visita agendadas para agendamento ${created.id}`);
+      } catch (notificationError) {
+        // logger.error('Erro ao agendar notificações de pré-visita:', notificationError);
           // Não falhar o agendamento por erro nas notificações
         }
       }
@@ -855,7 +882,7 @@ Se precisar alterar, me avise.`;
        
        return `${summary}\n\n${ctas}`;
     } catch (e: any) {
-      logger.error('Erro no fluxo de agendamento:', e);
+      // logger.error('Erro no fluxo de agendamento:', e);
       // Incrementar métrica de erros da API Trinks
       const errorCode = e?.response?.status?.toString() || 'unknown';
       incrementTrinksErrors(errorCode, 'agendamento');

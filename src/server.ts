@@ -7,7 +7,7 @@ import { initPersistence, setConversationState, getConversationState, recordAppo
 import jwt from 'jsonwebtoken';
 import { getAllConversationStates } from './db/index';
 import logger from './utils/logger';
-import { adminAuth, adminRateLimit, auditLogger } from './middleware/security';
+import { adminAuth, adminRateLimit, auditLogger, webhookAuth, webhookRateLimit, webhookDedupe } from './middleware/security';
 import { metricsMiddleware, metricsHandler, incrementConversationsStarted, incrementServiceSuggestions, incrementBookingsConfirmed, incrementTrinksErrors } from './middleware/metrics';
 import { healthHandler, readyHandler } from './middleware/health';
 
@@ -61,6 +61,7 @@ const EnvSchema = z.object({
   REDIS_URL: z.string().optional(),
   DATABASE_SSL: z.string().optional(), // 'true' | 'false' | 'no-verify'
   ADMIN_TOKEN: z.string().optional(), // Token for admin authentication
+  EVOLUTION_WEBHOOK_TOKEN: z.string().optional(), // Token for webhook authentication
 });
 
 const env = EnvSchema.parse(process.env);
@@ -106,7 +107,7 @@ app.get('/__ping', (_req, res) => res.json({ ok: true, at: 'root' }));
 // Alias extra para diagnosticar matching de rotas independente do método
 app.all('/__ping2', (_req, res) => res.json({ ok: true, at: 'root-2' }));
 // Evolution webhook receiver (incoming WhatsApp messages)
-app.post('/webhooks/evolution', async (req, res) => {
+app.post('/webhooks/evolution', webhookRateLimit, webhookAuth, webhookDedupe, async (req, res) => {
   try {
     const payload = req.body;
 
@@ -127,6 +128,38 @@ app.post('/webhooks/evolution', async (req, res) => {
     if (payload?.data?.key && typeof payload.data.key === 'object' && payload?.data?.message) {
       number = normalizeNumber(payload.data.key.remoteJid);
       text = extractTextFromMessage(payload.data.message);
+      
+      // Check for opt-out/opt-in messages first
+      if (text && number) {
+        const { OptOutService } = await import('./services/opt-out');
+        const { db } = await import('./db/index');
+        const { EvolutionAPI } = await import('./integrations/evolution');
+        
+        const evolutionAPI = new EvolutionAPI();
+        const optOutService = new OptOutService(db, evolutionAPI);
+        
+        // Handle opt-out messages (PARAR, STOP, etc.)
+        const wasOptOut = await optOutService.processOptOutMessage('default', number, text);
+        if (wasOptOut) {
+          res.status(200).json({ received: true, handled: 'opt_out' });
+          return;
+        }
+        
+        // Handle opt-in messages (VOLTAR, etc.)
+        const wasOptIn = await optOutService.processOptInMessage('default', number, text);
+        if (wasOptIn) {
+          res.status(200).json({ received: true, handled: 'opt_in' });
+          return;
+        }
+        
+        // Check if user is opted out before processing normal messages
+        const isOptedOut = await optOutService.isUserOptedOut('default', number);
+        if (isOptedOut) {
+          // User is opted out, don't process the message
+          res.status(200).json({ received: true, handled: 'opted_out' });
+          return;
+        }
+      }
       messageId = String(payload?.data?.key?.id || payload?.data?.message?.key?.id || payload?.data?.stanzaId || payload?.data?.messageTimestamp || '') || undefined;
     }
     else if (payload?.data?.message) {

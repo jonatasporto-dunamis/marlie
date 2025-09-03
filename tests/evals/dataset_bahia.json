@@ -1,0 +1,475 @@
+{
+  "name": "Dataset NLU Bahia/BR",
+  "description": "Dataset de frases com gírias e expressões regionais da Bahia para testes de regressão NLU",
+  "version": "1.0.0",
+  "total_samples": 45,
+  "categories": {
+    "agendamento": 18,
+    "confirmacao": 8,
+    "consultas": 7,
+    "acoes": 6,
+    "negacao": 6
+  },
+  "samples": [
+    {
+      "id": 1,
+      "input": "Oxe, dá pra amanhã cedinho?",
+      "expected": {
+        "intent": "agendar",
+        "dateRel": "amanhã",
+        "period": "manhã"
+      },
+      "category": "agendamento",
+      "dialect_features": ["oxe", "cedinho"]
+    },
+    {
+      "id": 2,
+      "input": "Quero fazer uma cutilagem mais pra noitinha",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "cutilagem",
+        "period": "noite"
+      },
+      "category": "agendamento",
+      "dialect_features": ["mais pra", "noitinha"]
+    },
+    {
+      "id": 3,
+      "input": "Beleza, finalzinho da tarde tá massa",
+      "expected": {
+        "intent": "confirmar",
+        "period": "tarde"
+      },
+      "category": "confirmacao",
+      "dialect_features": ["beleza", "finalzinho", "tá massa"]
+    },
+    {
+      "id": 4,
+      "input": "Dá pra ser entre 14 e 15?",
+      "expected": {
+        "intent": "agendar",
+        "timeISO": "14:00"
+      },
+      "category": "agendamento",
+      "dialect_features": ["dá pra", "entre X e Y"]
+    },
+    {
+      "id": 5,
+      "input": "Num rola cedim não, rapaz",
+      "expected": {
+        "intent": "negar",
+        "period": "manhã"
+      },
+      "category": "negacao",
+      "dialect_features": ["num rola", "cedim", "rapaz"]
+    },
+    {
+      "id": 6,
+      "input": "Eita, depois do almoço pode ser?",
+      "expected": {
+        "intent": "agendar",
+        "period": "tarde"
+      },
+      "category": "agendamento",
+      "dialect_features": ["eita", "depois do almoço"]
+    },
+    {
+      "id": 7,
+      "input": "Lá pras 16h tá bom, véi",
+      "expected": {
+        "intent": "confirmar",
+        "timeISO": "16:00"
+      },
+      "category": "confirmacao",
+      "dialect_features": ["lá pras", "tá bom", "véi"]
+    },
+    {
+      "id": 8,
+      "input": "Vixe, quanto é a esmaltação?",
+      "expected": {
+        "intent": "consultar_preco",
+        "serviceName": "esmaltação"
+      },
+      "category": "consultas",
+      "dialect_features": ["vixe"]
+    },
+    {
+      "id": 9,
+      "input": "Minha fia, onde vocês ficam?",
+      "expected": {
+        "intent": "consultar_endereco"
+      },
+      "category": "consultas",
+      "dialect_features": ["minha fia"]
+    },
+    {
+      "id": 10,
+      "input": "Quero remarcar, sô",
+      "expected": {
+        "intent": "remarcar"
+      },
+      "category": "acoes",
+      "dialect_features": ["sô"]
+    },
+    {
+      "id": 11,
+      "input": "Ali pelas 10h da manhã",
+      "expected": {
+        "intent": "agendar",
+        "timeISO": "10:00",
+        "period": "manhã"
+      },
+      "category": "agendamento",
+      "dialect_features": ["ali pelas"]
+    },
+    {
+      "id": 12,
+      "input": "Tardinha tá certo, blz",
+      "expected": {
+        "intent": "confirmar",
+        "period": "tarde"
+      },
+      "category": "confirmacao",
+      "dialect_features": ["tardinha", "tá certo", "blz"]
+    },
+    {
+      "id": 13,
+      "input": "Antes do almoço num dá não",
+      "expected": {
+        "intent": "negar",
+        "period": "manhã"
+      },
+      "category": "negacao",
+      "dialect_features": ["antes do almoço", "num dá"]
+    },
+    {
+      "id": 14,
+      "input": "Progressiva com a Maria amanhã cedim",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "progressiva",
+        "professionalName": "Maria",
+        "dateRel": "amanhã",
+        "period": "manhã"
+      },
+      "category": "agendamento",
+      "dialect_features": ["cedim"]
+    },
+    {
+      "id": 15,
+      "input": "Oxente, preciso cancelar",
+      "expected": {
+        "intent": "cancelar"
+      },
+      "category": "acoes",
+      "dialect_features": ["oxente"]
+    },
+    {
+      "id": 16,
+      "input": "Noitim pode ser, meu rei?",
+      "expected": {
+        "intent": "agendar",
+        "period": "noite"
+      },
+      "category": "agendamento",
+      "dialect_features": ["noitim", "meu rei"]
+    },
+    {
+      "id": 17,
+      "input": "Finalzim da tarde, pode ser?",
+      "expected": {
+        "intent": "agendar",
+        "period": "tarde"
+      },
+      "category": "agendamento",
+      "dialect_features": ["finalzim"]
+    },
+    {
+      "id": 18,
+      "input": "Massa, 15:30 tá perfeito",
+      "expected": {
+        "intent": "confirmar",
+        "timeISO": "15:30"
+      },
+      "category": "confirmacao",
+      "dialect_features": ["massa"]
+    },
+    {
+      "id": 19,
+      "input": "Design de sobrancelha quanto custa?",
+      "expected": {
+        "intent": "consultar_preco",
+        "serviceName": "design de sobrancelha"
+      },
+      "category": "consultas",
+      "dialect_features": []
+    },
+    {
+      "id": 20,
+      "input": "Dá pra ser hoje à tarde?",
+      "expected": {
+        "intent": "agendar",
+        "dateRel": "hoje",
+        "period": "tarde"
+      },
+      "category": "agendamento",
+      "dialect_features": ["dá pra"]
+    },
+    {
+      "id": 21,
+      "input": "Não rola amanhã não, véi",
+      "expected": {
+        "intent": "negar",
+        "dateRel": "amanhã"
+      },
+      "category": "negacao",
+      "dialect_features": ["não rola", "véi"]
+    },
+    {
+      "id": 22,
+      "input": "Hidratação lá pras 17h",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "hidratação",
+        "timeISO": "17:00"
+      },
+      "category": "agendamento",
+      "dialect_features": ["lá pras"]
+    },
+    {
+      "id": 23,
+      "input": "Pode ser, tá certo",
+      "expected": {
+        "intent": "confirmar"
+      },
+      "category": "confirmacao",
+      "dialect_features": ["pode ser", "tá certo"]
+    },
+    {
+      "id": 24,
+      "input": "Vish, qual o endereço mesmo?",
+      "expected": {
+        "intent": "consultar_endereco"
+      },
+      "category": "consultas",
+      "dialect_features": ["vish"]
+    },
+    {
+      "id": 25,
+      "input": "Manicure entre 13 e 14h",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "manicure",
+        "timeISO": "13:00"
+      },
+      "category": "agendamento",
+      "dialect_features": ["entre X e Y"]
+    },
+    {
+      "id": 26,
+      "input": "Tardim não dá, rapaz",
+      "expected": {
+        "intent": "negar",
+        "period": "tarde"
+      },
+      "category": "negacao",
+      "dialect_features": ["tardim", "não dá", "rapaz"]
+    },
+    {
+      "id": 27,
+      "input": "Escova amanhã de manhã, beleza?",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "escova",
+        "dateRel": "amanhã",
+        "period": "manhã"
+      },
+      "category": "agendamento",
+      "dialect_features": ["beleza"]
+    },
+    {
+      "id": 28,
+      "input": "Coloração, quanto fica?",
+      "expected": {
+        "intent": "consultar_preco",
+        "serviceName": "coloração"
+      },
+      "category": "consultas",
+      "dialect_features": []
+    },
+    {
+      "id": 29,
+      "input": "Dá pra ser mais pra 18h?",
+      "expected": {
+        "intent": "agendar",
+        "timeISO": "18:00"
+      },
+      "category": "agendamento",
+      "dialect_features": ["dá pra", "mais pra"]
+    },
+    {
+      "id": 30,
+      "input": "Tá bom, confirmo então",
+      "expected": {
+        "intent": "confirmar"
+      },
+      "category": "confirmacao",
+      "dialect_features": ["tá bom"]
+    },
+    {
+      "id": 31,
+      "input": "Pedicure hoje à noite",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "pedicure",
+        "dateRel": "hoje",
+        "period": "noite"
+      },
+      "category": "agendamento",
+      "dialect_features": []
+    },
+    {
+      "id": 32,
+      "input": "Luzes, qual o preço?",
+      "expected": {
+        "intent": "consultar_preco",
+        "serviceName": "luzes"
+      },
+      "category": "consultas",
+      "dialect_features": []
+    },
+    {
+      "id": 33,
+      "input": "Babyliss ali pelas 16h",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "babyliss",
+        "timeISO": "16:00"
+      },
+      "category": "agendamento",
+      "dialect_features": ["ali pelas"]
+    },
+    {
+      "id": 34,
+      "input": "Num quero mais não",
+      "expected": {
+        "intent": "negar"
+      },
+      "category": "negacao",
+      "dialect_features": ["num"]
+    },
+    {
+      "id": 35,
+      "input": "Chapinha depois do almoço",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "chapinha",
+        "period": "tarde"
+      },
+      "category": "agendamento",
+      "dialect_features": ["depois do almoço"]
+    },
+    {
+      "id": 36,
+      "input": "Blz, 14:30 então",
+      "expected": {
+        "intent": "confirmar",
+        "timeISO": "14:30"
+      },
+      "category": "confirmacao",
+      "dialect_features": ["blz"]
+    },
+    {
+      "id": 37,
+      "input": "Cutilagem com a Ana cedinho",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "cutilagem",
+        "professionalName": "Ana",
+        "period": "manhã"
+      },
+      "category": "agendamento",
+      "dialect_features": ["cedinho"]
+    },
+    {
+      "id": 38,
+      "input": "Preciso do endereço, minha fia",
+      "expected": {
+        "intent": "consultar_endereco"
+      },
+      "category": "consultas",
+      "dialect_features": ["minha fia"]
+    },
+    {
+      "id": 39,
+      "input": "Quero cancelar o agendamento",
+      "expected": {
+        "intent": "cancelar"
+      },
+      "category": "acoes",
+      "dialect_features": []
+    },
+    {
+      "id": 40,
+      "input": "Esmaltação lá pras 15h30",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "esmaltação",
+        "timeISO": "15:30"
+      },
+      "category": "agendamento",
+      "dialect_features": ["lá pras"]
+    },
+    {
+      "id": 41,
+      "input": "Massa, confirmo esse horário",
+      "expected": {
+        "intent": "confirmar"
+      },
+      "category": "confirmacao",
+      "dialect_features": ["massa"]
+    },
+    {
+      "id": 42,
+      "input": "Progressiva, quanto custa?",
+      "expected": {
+        "intent": "consultar_preco",
+        "serviceName": "progressiva"
+      },
+      "category": "consultas",
+      "dialect_features": []
+    },
+    {
+      "id": 43,
+      "input": "Não dá pra amanhã não, véi",
+      "expected": {
+        "intent": "negar",
+        "dateRel": "amanhã"
+      },
+      "category": "negacao",
+      "dialect_features": ["não dá", "véi"]
+    },
+    {
+      "id": 44,
+      "input": "Design de sobrancelha noitinha",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "design de sobrancelha",
+        "period": "noite"
+      },
+      "category": "agendamento",
+      "dialect_features": ["noitinha"]
+    },
+    {
+      "id": 45,
+      "input": "Hidratação entre 10 e 11h",
+      "expected": {
+        "intent": "agendar",
+        "serviceName": "hidratação",
+        "timeISO": "10:00"
+      },
+      "category": "agendamento",
+      "dialect_features": ["entre X e Y"]
+    }
+  ]
+}

@@ -7,7 +7,7 @@
       "id": 1,
       "input": "Oi meu rei, quero fazer as unhas amanhã de manhã",
       "expected_output": {
-        "intent": "schedule",
+        "intent": "agendar",
         "serviceName": "manicure",
         "dateRel": "amanhã",
         "period": "manhã",
@@ -58,7 +58,7 @@
       "id": 5,
       "input": "Ô minha filha, que horas vocês abrem?",
       "expected_output": {
-        "intent": "hours",
+        "intent": "consultar_endereco",
         "action": "query"
       },
       "category": "consulta_horarios",
@@ -160,7 +160,7 @@
       "id": 14,
       "input": "Meu nome é João Silva, telefone 71999887766",
       "expected_output": {
-        "intent": "create_user",
+        "intent": "outros",
         "name": "João Silva",
         "phone": "71999887766",
         "action": "create"

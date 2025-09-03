@@ -1,5 +1,14 @@
 import * as trinks from '../integrations/trinks';
 import logger from './logger';
+import { 
+  resolveDateRelative, 
+  resolveCompleteDateTime, 
+  getNextBusinessDay, 
+  formatDateBR,
+  isBusinessDay,
+  type Period,
+  type ResolvedDate 
+} from './date-resolver';
 
 // Mapeamento de períodos para janelas de horário
 const PERIOD_WINDOWS = {
@@ -7,8 +16,6 @@ const PERIOD_WINDOWS = {
   tarde: { start: '13:30', end: '17:30' },
   noite: { start: '18:00', end: '20:00' }
 } as const;
-
-type Period = keyof typeof PERIOD_WINDOWS;
 
 // Função para detectar termos relativos de data e período
 export function parseRelativeDateTime(text: string): {
@@ -48,21 +55,10 @@ export function parseRelativeDateTime(text: string): {
   return { dateRel, period, timeISO };
 }
 
-// Função para converter data relativa em ISO
+// Função para converter data relativa em ISO (usando novo resolver)
 export function convertRelativeDateToISO(dateRel: string): string {
-  const now = new Date();
-  // Configurar timezone para America/Bahia
-  const bahiaTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Bahia' }));
-  
-  switch (dateRel) {
-    case 'hoje':
-      return bahiaTime.toISOString().split('T')[0];
-    case 'amanhã':
-      bahiaTime.setDate(bahiaTime.getDate() + 1);
-      return bahiaTime.toISOString().split('T')[0];
-    default:
-      return bahiaTime.toISOString().split('T')[0];
-  }
+  const resolved = resolveDateRelative(dateRel);
+  return resolved.dateISO;
 }
 
 // Função para gerar horários dentro de uma janela
@@ -169,22 +165,7 @@ export async function suggestProactiveTimeSlots(
   }
 }
 
-// Função para obter próximo dia útil (terça a sábado)
-function getNextBusinessDay(dateISO: string): string {
-  const date = new Date(dateISO + 'T00:00:00');
-  
-  do {
-    date.setDate(date.getDate() + 1);
-    const dayOfWeek = date.getDay(); // 0 = domingo, 1 = segunda, ..., 6 = sábado
-    
-    // Terça (2) a sábado (6)
-    if (dayOfWeek >= 2 && dayOfWeek <= 6) {
-      break;
-    }
-  } while (true);
-  
-  return date.toISOString().split('T')[0];
-}
+// Função removida - agora usando getNextBusinessDay do date-resolver
 
 // Função para formatar sugestões de horário para o usuário
 export function formatTimeSlotSuggestions(
@@ -194,24 +175,16 @@ export function formatTimeSlotSuggestions(
   fallbackDate?: string,
   fallbackSuggestions?: string[]
 ): string {
-  const formatDate = (isoDate: string) => {
-    const date = new Date(isoDate + 'T00:00:00');
-    return date.toLocaleDateString('pt-BR', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long'
-    });
-  };
   
   if (suggestions.length > 0) {
-    const formattedDate = formatDate(dateISO);
+    const formattedDate = formatDateBR(dateISO);
     const timeOptions = suggestions.map((time, index) => `${index + 1}. ${time}`).join('\n');
     
     return `Perfeito! Tenho estes horários disponíveis para ${serviceName.toLowerCase()} em ${formattedDate}:\n\n${timeOptions}\n\nQual prefere? Pode responder com o número ou horário.`;
   }
   
   if (fallbackDate && fallbackSuggestions && fallbackSuggestions.length > 0) {
-    const formattedFallbackDate = formatDate(fallbackDate);
+    const formattedFallbackDate = formatDateBR(fallbackDate);
     const timeOptions = fallbackSuggestions.map((time, index) => `${index + 1}. ${time}`).join('\n');
     
     return `Não tenho disponibilidade na data solicitada. Que tal em ${formattedFallbackDate}?\n\n${timeOptions}\n\nQual horário prefere?`;

@@ -1,7 +1,15 @@
-import axios from 'axios';
+import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
 import { z } from 'zod';
-import axiosRetry from 'axios-retry';
 import logger from '../utils/logger';
+import { retryWithBackoff, isRetryableError, isIdempotentMethod } from '../utils/backoff';
+import { 
+  generateBookingIdempotencyKey, 
+  withIdempotency, 
+  checkIdempotency,
+  markInProgress,
+  markCompleted 
+} from '../utils/idempotency';
+import { redis } from '../db/index';
 
 const TrinksEnvSchema = z.object({
   TRINKS_BASE_URL: z.string().url().optional(),
@@ -29,11 +37,13 @@ function validateConfigured(env: z.infer<typeof TrinksEnvSchema>) {
   }
 }
 
-function getClient() {
+function getClient(): AxiosInstance {
   const env = getEnv();
   validateConfigured(env);
+  
   const client = axios.create({
     baseURL: env.TRINKS_BASE_URL,
+    timeout: 10000, // 10 seconds timeout
     headers: {
       'Content-Type': 'application/json',
       'X-Api-Key': env.TRINKS_API_KEY,
@@ -41,15 +51,46 @@ function getClient() {
     },
   });
   
-  axiosRetry(client, {
-    retries: 3,
-    retryDelay: (retryCount) => retryCount * 1000,
-    retryCondition: (error) => {
-      return axiosRetry.isNetworkOrIdempotentRequestError(error) || error.response?.status === 429;
-    },
-  });
   return client;
 }
+
+/**
+ * Execute request with retry logic and proper error handling
+ */
+async function executeWithRetry<T>(
+  operation: () => Promise<T>,
+  method: string = 'GET'
+): Promise<T> {
+  const shouldRetry = (error: any) => {
+    // Only retry idempotent methods or specific errors
+    if (!isIdempotentMethod(method) && method.toUpperCase() !== 'POST') {
+      return false;
+    }
+    
+    return isRetryableError(error);
+  };
+  
+  return retryWithBackoff(operation, {
+    baseDelay: 1000,
+    maxDelay: 10000,
+    maxRetries: 2,
+    jitter: true
+  }, shouldRetry);
+}
+
+// Cache keys
+const CACHE_KEYS = {
+  SERVICOS: 'trinks:servicos',
+  PROFISSIONAIS: 'trinks:profissionais',
+  AGENDA: (profissionalId: string, data: string) => `trinks:agenda:${profissionalId}:${data}`
+};
+
+// Cache TTL (6-24h)
+const CACHE_TTL = {
+  SERVICOS: 24 * 60 * 60, // 24 hours
+  PROFISSIONAIS: 24 * 60 * 60, // 24 hours
+  AGENDA: 6 * 60 * 60 // 6 hours
+};
 
 export const Trinks = {
   async buscarClientes(params: {
@@ -59,23 +100,29 @@ export const Trinks = {
     incluirDetalhes?: boolean | string;
   }) {
     const client = getClient();
-    const res = await client.get('/v1/clientes', {
-      params: {
-        nome: params.nome,
-        cpf: params.cpf,
-        telefone: params.telefone,
-        incluirDetalhes: params.incluirDetalhes,
-      },
-    });
-    return res.data;
+    
+    return executeWithRetry(async () => {
+      const res = await client.get('/v1/clientes', {
+        params: {
+          nome: params.nome,
+          cpf: params.cpf,
+          telefone: params.telefone,
+          incluirDetalhes: params.incluirDetalhes,
+        },
+      });
+      return res.data;
+    }, 'GET');
   },
 
   async criarCliente(data: any) {
     const client = getClient();
-    const res = await client.post('/v1/clientes', data, {
-      headers: { 'content-type': 'application/json' },
-    });
-    return res.data;
+    
+    return executeWithRetry(async () => {
+      const res = await client.post('/v1/clientes', data, {
+        headers: { 'content-type': 'application/json' },
+      });
+      return res.data;
+    }, 'POST');
   },
 
   async buscarServicos(params: {
@@ -83,9 +130,33 @@ export const Trinks = {
     categoria?: string;
     somenteVisiveisCliente?: boolean | string;
   }) {
+    // Try cache first
+    try {
+      const cached = await redis.get(CACHE_KEYS.SERVICOS);
+      if (cached) {
+        logger.debug('Returning cached servicos from Trinks');
+        return JSON.parse(cached);
+      }
+    } catch (error) {
+      logger.warn('Failed to get servicos from cache:', error);
+    }
+    
     const client = getClient();
-    const res = await client.get('/v1/servicos', { params });
-    return res.data;
+    
+    return executeWithRetry(async () => {
+      const res = await client.get('/v1/servicos', { params });
+      const data = res.data;
+      
+      // Cache the result
+      try {
+        await redis.setex(CACHE_KEYS.SERVICOS, CACHE_TTL.SERVICOS, JSON.stringify(data));
+        logger.debug('Cached servicos from Trinks');
+      } catch (error) {
+        logger.warn('Failed to cache servicos:', error);
+      }
+      
+      return data;
+    }, 'GET');
   },
 
   async buscarAgendaPorProfissional(params: {
@@ -94,17 +165,44 @@ export const Trinks = {
     servicoDuracao: string | number;
     profissionalId?: string | number;
   }) {
+    const cacheKey = CACHE_KEYS.AGENDA(params.profissionalId?.toString() || 'all', params.data);
+    
+    // Try cache first
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached) {
+        logger.debug(`Returning cached agenda for professional ${params.profissionalId || 'all'}`);
+        return JSON.parse(cached);
+      }
+    } catch (error) {
+      logger.warn('Failed to get agenda from cache:', error);
+    }
+    
     const client = getClient();
-    const path = `/v1/agendamentos/profissionais/${params.data}`;
-    const res = await client.get(path, {
-      params: {
-        servicoId: params.servicoId,
-        servicoDuracao: params.servicoDuracao,
-        // Só envia profissionalId se informado
-        ...(params.profissionalId !== undefined ? { profissionalId: params.profissionalId } : {}),
-      },
-    });
-    return res.data;
+    
+    return executeWithRetry(async () => {
+      const path = `/v1/agendamentos/profissionais/${params.data}`;
+      const res = await client.get(path, {
+        params: {
+          servicoId: params.servicoId,
+          servicoDuracao: params.servicoDuracao,
+          // Só envia profissionalId se informado
+          ...(params.profissionalId !== undefined ? { profissionalId: params.profissionalId } : {}),
+        },
+      });
+      
+      const data = res.data;
+      
+      // Cache the result
+      try {
+        await redis.setex(cacheKey, CACHE_TTL.AGENDA, JSON.stringify(data));
+        logger.debug(`Cached agenda for professional ${params.profissionalId || 'all'}`);
+      } catch (error) {
+        logger.warn('Failed to cache agenda:', error);
+      }
+      
+      return data;
+    }, 'GET');
   },
 
   async verificarHorarioDisponivel(params: {
@@ -183,16 +281,46 @@ export const Trinks = {
     confirmado: boolean; // novo campo obrigatório
     observacoes?: string; // opcional
     profissionalId?: number; // opcional
+    telefone?: string;
   }) {
-    try {
-      const client = getClient();
-      const res = await client.post('/v1/agendamentos', data, {
-        headers: { 'content-type': 'application/json' },
-      });
-      return res.data;
-    } catch (error) {
-      logger.error('Erro ao criar agendamento:', error);
-      throw error;
-    }
+    // Generate idempotency key
+    const idempotencyKey = generateBookingIdempotencyKey({
+      telefone: data.telefone || '',
+      servicoId: data.servicoId.toString(),
+      data: data.dataHoraInicio.split('T')[0],
+      horario: data.dataHoraInicio.split('T')[1]?.substring(0, 5) || ''
+    });
+    
+    // Use idempotency wrapper
+    return withIdempotency(
+      idempotencyKey,
+      async () => {
+        const client = getClient();
+        
+        return executeWithRetry(async () => {
+          const res = await client.post('/v1/agendamentos', data, {
+            headers: { 
+              'content-type': 'application/json',
+              'Idempotency-Key': idempotencyKey
+            },
+          });
+          
+          // Invalidate related cache entries
+          try {
+            const agendaCacheKey = CACHE_KEYS.AGENDA(
+              data.profissionalId?.toString() || 'all', 
+              data.dataHoraInicio.split('T')[0]
+            );
+            await redis.del(agendaCacheKey);
+            logger.debug(`Invalidated agenda cache for professional ${data.profissionalId || 'all'}`);
+          } catch (error) {
+            logger.warn('Failed to invalidate agenda cache:', error);
+          }
+          
+          return res.data;
+        }, 'POST');
+      },
+      30 * 60 // 30 minutes TTL
+    );
   },
 };

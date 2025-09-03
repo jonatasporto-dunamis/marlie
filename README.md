@@ -11,10 +11,28 @@ Sistema de agendamento via WhatsApp integrado com a API Trinks, incluindo funcio
 - Integração com API Trinks para criação de agendamentos
 - Deduplicação de mensagens e idempotência
 
+### Sistema de Upsell Inteligente
+- **Seleção Contextual**: Máximo 1 upsell por conversa baseado no contexto
+- **Timing Otimizado**: Ofertas após confirmação de agendamento
+- **Métricas de Conversão**: Tracking de performance e ticket médio
+- **CTAs Simples**: Interface amigável para aceitar/recusar ofertas
+
+### Mensagens Automáticas
+- **Pré-Visita**: Lembretes enviados 24-40h antes do agendamento
+- **No-Show Shield**: Confirmação de presença no dia anterior às 18h
+- **Agendamento Inteligente**: Worker/cron para processamento assíncrono
+- **Sistema de Opt-out**: Usuários podem parar mensagens com 'PARAR'
+- **Opt-in Flexível**: Reativação com 'VOLTAR' ou palavras similares
+
 ### Segurança e Autenticação
 - **Autenticação Admin**: Middleware `adminAuth` com token `X-Admin-Token`
-- **Rate Limiting**: Limitação de 60 requisições por minuto para rotas administrativas
-- **Logs de Auditoria**: Registro de tentativas de acesso com IP, User-Agent e resultado
+- **Autenticação Webhook**: Middleware `webhookAuth` com token `X-Webhook-Token`
+- **Rate Limiting**: 
+  - Admin: 60 req/min por IP
+  - Webhook: 300 req/min por IP (5 req/s)
+- **Deduplicação Avançada**: Cache em memória para evitar processamento duplicado
+- **Mascaramento PII**: Logs automaticamente mascarados (telefones, emails, CPF)
+- **Logs de Auditoria**: Registro completo de acessos com contexto de segurança
 
 ### Observabilidade
 
@@ -26,9 +44,24 @@ Sistema de agendamento via WhatsApp integrado com a API Trinks, incluindo funcio
 #### Métricas Prometheus
 Disponíveis no endpoint `/metrics`:
 
+**Métricas de Conversação:**
 - `conversations_started_total`: Contador de conversas iniciadas por tenant
 - `service_suggestions_shown_total`: Contador de sugestões de serviços mostradas
 - `bookings_confirmed_total`: Contador de agendamentos confirmados
+
+**Métricas de Upsell:**
+- `upsell_offered_total`: Contador de upsells oferecidos
+- `upsell_accepted_total`: Contador de upsells aceitos
+- `upsell_revenue_total`: Receita total gerada por upsells
+
+**Métricas de Mensagens Automáticas:**
+- `pre_visit_sent_total`: Contador de mensagens de pré-visita enviadas
+- `no_show_check_sent_total`: Contador de verificações de no-show enviadas
+- `no_show_prevented_total`: Contador de no-shows prevenidos
+- `reschedule_requested_total`: Contador de solicitações de remarcação
+- `user_opt_out_total`: Contador de usuários que optaram por sair
+
+**Métricas de Sistema:**
 - `api_trinks_errors_total`: Contador de erros da API Trinks por código e endpoint
 - `http_request_duration_seconds`: Histograma de tempo de resposta HTTP
 - `active_connections`: Gauge de conexões ativas
@@ -77,6 +110,7 @@ REDIS_URL=redis://localhost:6379
 EVOLUTION_BASE_URL=http://localhost:8080
 EVOLUTION_API_KEY=your_api_key
 EVOLUTION_INSTANCE=your_instance
+EVOLUTION_WEBHOOK_TOKEN=your_webhook_token
 
 # Trinks API
 TRINKS_BASE_URL=https://api.trinks.com
@@ -89,6 +123,38 @@ OPENAI_MODEL=gpt-3.5-turbo
 
 # Segurança
 ADMIN_TOKEN=your_secure_admin_token
+
+# Feature Flags
+# Sistema de Upsell
+UPSELL_ENABLED=true
+UPSELL_MAX_PER_CONVERSATION=1
+UPSELL_TIMEOUT_MS=300000
+
+# Mensagens Automáticas
+PRE_VISIT_ENABLED=true
+PRE_VISIT_HOURS_BEFORE=24
+PRE_VISIT_MAX_HOURS_BEFORE=40
+
+# No-Show Shield
+NO_SHOW_SHIELD_ENABLED=true
+NO_SHOW_CHECK_HOUR=18
+NO_SHOW_CHECK_DAYS_BEFORE=1
+
+# Worker de Agendamento
+SCHEDULER_ENABLED=true
+SCHEDULER_INTERVAL_MS=60000
+SCHEDULER_MAX_RETRIES=3
+SCHEDULER_RETRY_BACKOFF_MS=300000
+
+# Sistema de Opt-out
+OPT_OUT_ENABLED=true
+OPT_OUT_KEYWORDS=PARAR,STOP,SAIR,CANCELAR
+OPT_IN_KEYWORDS=VOLTAR,ATIVAR,SIM,QUERO
+
+# Privacidade e Segurança
+MASK_PII_IN_LOGS=true
+LOG_RETENTION_DAYS=30
+LOG_LEVEL=info
 
 # Servidor
 PORT=3000
@@ -153,12 +219,18 @@ Todos os endpoints administrativos requerem autenticação via header `X-Admin-T
 7. Resposta via Evolution API
 
 ### Componentes
-- **Server**: Express.js com middlewares de segurança
+- **Server**: Express.js com middlewares de segurança avançados
 - **Dialog Orchestrator**: Lógica conversacional e fluxos
 - **Trinks Integration**: Cliente para API Trinks
+- **Upsell Engine**: Sistema inteligente de ofertas contextuais
+- **Message Scheduler**: Worker para mensagens automáticas
+- **No-Show Shield**: Sistema de prevenção de faltas
+- **Opt-out Service**: Gerenciamento de preferências do usuário
+- **Evolution API Client**: Interface para envio de mensagens WhatsApp
 - **Database**: PostgreSQL com Redis para cache
-- **Metrics**: Prometheus para observabilidade
+- **Metrics**: Prometheus para observabilidade completa
 - **Health Checks**: Monitoramento de dependências
+- **Security Layer**: Rate limiting, dedupe e mascaramento PII
 
 ## 📝 Desenvolvimento
 
