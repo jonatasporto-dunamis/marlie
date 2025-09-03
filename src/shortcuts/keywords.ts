@@ -1,9 +1,9 @@
 import { Pool } from 'pg';
-import { Redis } from 'ioredis';
+import { RedisClientType } from 'redis';
 import logger from '../utils/logger';
 import { sendTemplateMessage, MessageTemplates } from '../messages/templates';
 import { getBookingData } from '../services/booking';
-import { criarAgendamento, cancelarAgendamento } from '../integrations/trinks';
+import { Trinks } from '../integrations/trinks';
 import { recommendSlots } from '../recommendation/recommend';
 
 interface ShortcutContext {
@@ -55,7 +55,7 @@ export function detectShortcut(message: string): string | null {
  */
 export async function handleGlobalShortcut(
   db: Pool,
-  redis: Redis,
+  redis: RedisClientType,
   shortcut: string,
   context: ShortcutContext
 ): Promise<ShortcutResult> {
@@ -101,7 +101,7 @@ export async function handleGlobalShortcut(
  */
 async function handleRescheduleShortcut(
   db: Pool,
-  redis: Redis,
+  redis: RedisClientType,
   context: ShortcutContext
 ): Promise<ShortcutResult> {
   try {
@@ -123,9 +123,12 @@ async function handleRescheduleShortcut(
     
     const availableSlots = await recommendSlots(
       db,
-      context.tenantId,
-      context.phone,
-      dateISO
+      redis,
+      {
+        tenantId: context.tenantId,
+        phone: context.phone,
+        dateISO: dateISO
+      }
     );
     
     if (availableSlots.length === 0) {
@@ -146,7 +149,7 @@ async function handleRescheduleShortcut(
     
     availableSlots.slice(0, 3).forEach((slot, index) => {
       const slotDate = new Date(slot.timeISO);
-      response += `${index + 1}. ${formatDate(slotDate)} às ${formatTime(slotDate)}\n`;
+      response += `${index + 1}. ${formatDate(slot.timeISO)} às ${formatTime(slot.timeISO)}\n`;
     });
     
     response += `\nDigite o número da opção desejada ou *voltar* para cancelar.`;
@@ -158,7 +161,7 @@ async function handleRescheduleShortcut(
       step: 'awaiting_reschedule_choice'
     };
     
-    await redis.setex(
+    await redis.setEx(
       `reschedule:${context.phone}:${context.tenantId}`,
       300, // 5 minutos
       JSON.stringify(rescheduleData)
@@ -187,7 +190,7 @@ async function handleRescheduleShortcut(
  */
 async function handleCancelShortcut(
   db: Pool,
-  redis: Redis,
+  redis: RedisClientType,
   context: ShortcutContext
 ): Promise<ShortcutResult> {
   try {
@@ -216,7 +219,7 @@ async function handleCancelShortcut(
       step: 'awaiting_cancel_confirmation'
     };
     
-    await redis.setex(
+    await redis.setEx(
       `cancel:${context.phone}:${context.tenantId}`,
       300, // 5 minutos
       JSON.stringify(cancelData)
@@ -343,12 +346,12 @@ async function handleAddressShortcut(
  * Salva o contexto atual para permitir retorno após atalho
  */
 async function saveCurrentContext(
-  redis: Redis,
+  redis: RedisClientType,
   context: ShortcutContext
 ): Promise<void> {
   try {
     const contextKey = `context:${context.phone}:${context.tenantId}`;
-    await redis.setex(contextKey, 600, JSON.stringify({
+    await redis.setEx(contextKey, 600, JSON.stringify({
       step: context.currentStep,
       data: context.currentData,
       sessionId: context.sessionId,
@@ -363,7 +366,7 @@ async function saveCurrentContext(
  * Restaura o contexto salvo após processamento de atalho
  */
 export async function restoreContext(
-  redis: Redis,
+  redis: RedisClientType,
   phone: string,
   tenantId: string
 ): Promise<any> {

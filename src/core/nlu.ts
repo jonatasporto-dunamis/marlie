@@ -78,11 +78,10 @@ export async function processNLU(
     fullPrompt += 'IMPORTANTE: Retorne SOMENTE JSON válido, sem texto adicional ou formatação markdown.';
     
     // Chamar LLM
-    const response = await callLLM(fullPrompt, {
-      temperature: 0.1, // Baixa temperatura para consistência
-      maxTokens: 200,
-      model: 'gpt-3.5-turbo'
-    });
+    const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+      { role: 'user', content: fullPrompt }
+    ];
+    const response = await callLLM(messages, 'gpt-3.5-turbo');
     
     if (!response.success || !response.content) {
       throw new Error('LLM call failed: ' + response.error);

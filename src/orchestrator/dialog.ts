@@ -712,7 +712,7 @@ switch (currentSchedulingState) {
         });
         if (sugs.length > 0) {
           // Incrementar métrica de sugestões de serviços
-          sugs.forEach(s => incrementServiceSuggestions('default', s.servicoNome));
+          incrementServiceSuggestions('default', sugs.length);
           const lista = sugs.map((s, i) => `${i + 1}. ${s.servicoNome}`).join('\n');
           return `Antes de prosseguir, preciso que escolha um serviço do nosso catálogo. Algumas opções:\n\n${lista}`;
         }

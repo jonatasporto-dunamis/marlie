@@ -10,7 +10,7 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
   
   // Interceptar o final da resposta
   const originalEnd = res.end;
-  res.end = function(chunk?: any, encoding?: any) {
+  res.end = function(chunk?: any, encoding?: any, callback?: () => void) {
     const duration = (Date.now() - startTime) / 1000;
     
     // Registrar duração da requisição usando o novo sistema
@@ -26,7 +26,7 @@ export const metricsMiddleware = (req: Request, res: Response, next: NextFunctio
     }
 
     // Chamar o método original
-    originalEnd.call(this, chunk, encoding);
+    return originalEnd.call(this, chunk, encoding, callback);
   };
 
   next();

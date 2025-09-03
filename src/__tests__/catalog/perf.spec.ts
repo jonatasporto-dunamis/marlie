@@ -1,4 +1,4 @@
-import { getServicosSuggestions, upsertServicosProf, connectDb, pg } from '../../db/index';
+import { getServicosSuggestions, upsertServicosProf, initPersistence, pg } from '../../db/index';
 import logger from '../../utils/logger';
 
 // Mock do logger para evitar logs durante os testes
@@ -14,7 +14,7 @@ describe('Catalog Performance Tests', () => {
   const targetItemCount = 100; // Mais que 80 para garantir o teste
   
   beforeAll(async () => {
-    await connectDb();
+    await initPersistence({ redisUrl: null, databaseUrl: process.env.DATABASE_URL, databaseSsl: false });
     
     // Limpar dados de teste anteriores
     if (pg) {

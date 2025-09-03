@@ -1,4 +1,7 @@
 import { Request, Response } from 'express';
+import { Pool } from 'pg';
+import { createClient } from 'redis';
+import axios from 'axios';
 import logger from '../utils/logger';
 import { performHealthChecks, performReadinessCheck } from '../health/checks';
 

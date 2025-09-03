@@ -1,6 +1,6 @@
 import { Pool } from 'pg';
-import { logger } from '../logger';
-import { evolutionApi } from '../integrations/evolution';
+import logger from '../utils/logger';
+import { evolutionAPI } from '../integrations/evolution';
 import { MetricsHelper } from '../metrics';
 import { DateTime } from 'luxon';
 import { OptOutService } from '../services/opt-out';
@@ -129,7 +129,10 @@ export class MessageSchedulerWorker {
 
       // Send the message
       const message = this.formatMessage(job.kind, job.payload);
-      await evolutionApi.sendMessage(job.tenant_id, job.phone_e164, message);
+      await evolutionAPI.sendMessage({
+        number: job.phone_e164,
+        text: message
+      });
       
       // Mark job as sent
       await this.markJobSent(job.id);
@@ -153,7 +156,7 @@ export class MessageSchedulerWorker {
    */
   private async checkOptOut(tenantId: string, phone: string, messageType: string): Promise<boolean> {
     try {
-      const optOutService = new OptOutService(this.db, evolutionApi);
+      const optOutService = new OptOutService(this.db, evolutionAPI);
       return await optOutService.isUserOptedOut(tenantId, phone, messageType as 'pre_visit' | 'no_show_check');
     } catch (error) {
       logger.error('Failed to check user opt-out status', {

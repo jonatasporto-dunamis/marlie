@@ -8,7 +8,9 @@ describe('Trinks Retry 429 Tests', () => {
   
   beforeEach(async () => {
     // Clear Redis cache
-    await redis.flushdb();
+    if (redis) {
+      await redis.flushDb();
+    }
     
     // Mock environment variables
     process.env.TRINKS_BASE_URL = 'https://api.trinks.test';
@@ -23,7 +25,9 @@ describe('Trinks Retry 429 Tests', () => {
   });
   
   afterAll(async () => {
-    await redis.quit();
+    if (redis) {
+      await redis.quit();
+    }
   });
   
   it('should retry with progressive delays on 429 errors', async () => {

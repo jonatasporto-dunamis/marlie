@@ -1,6 +1,6 @@
 #!/usr/bin/env ts-node
 
-import { pg, connectDb } from '../../src/db/index';
+import { pg, initPersistence } from '../../src/db/index';
 import logger from '../../src/utils/logger';
 
 interface DuplicateGroup {
@@ -18,7 +18,7 @@ interface DuplicateGroup {
  */
 async function consolidateDuplicates(): Promise<void> {
   try {
-    await connectDb();
+    await initPersistence({ redisUrl: null, databaseUrl: process.env.DATABASE_URL, databaseSsl: false });
     
     if (!pg) {
       throw new Error('Conexão com banco de dados não disponível');
@@ -116,7 +116,7 @@ async function consolidateDuplicates(): Promise<void> {
  */
 async function analyzeDuplicates(): Promise<void> {
   try {
-    await connectDb();
+    await initPersistence({ redisUrl: null, databaseUrl: process.env.DATABASE_URL, databaseSsl: false });
     
     if (!pg) {
       throw new Error('Conexão com banco de dados não disponível');

@@ -1,4 +1,4 @@
-import { Redis } from 'ioredis';
+import { RedisClientType } from 'redis';
 import logger from '../utils/logger';
 import { sendMessage } from '../integrations/evolution';
 
@@ -7,6 +7,7 @@ interface PostBookingMessageData {
   serviceId: string;
   timeISO: string;
   ctaButtons: string[];
+  isUpsell?: boolean;
 }
 
 interface ReminderData {

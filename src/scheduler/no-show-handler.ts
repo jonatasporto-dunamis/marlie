@@ -1,8 +1,8 @@
 import { Pool } from 'pg';
-import { logger } from '../logger';
+import logger from '../utils/logger';
 import { MetricsHelper } from '../metrics';
 import { MessageSchedulerWorker } from './worker';
-import { evolutionApi } from '../integrations/evolution';
+import { evolutionAPI } from '../integrations/evolution';
 
 interface NoShowResponse {
   tenantId: string;
@@ -95,11 +95,10 @@ export class NoShowHandler {
       `• Traga um documento com foto\n\n` +
       `Até amanhã! 💖`;
     
-    await evolutionApi.sendMessage(
-      response.tenantId,
-      response.phone,
-      confirmationMessage
-    );
+    await evolutionAPI.sendMessage({
+      number: response.phone,
+      text: confirmationMessage
+    });
     
     // Registrar métrica de no-show prevenido
     MetricsHelper.incrementNoShowPrevented(response.tenantId);
@@ -129,11 +128,10 @@ export class NoShowHandler {
     
     const rescheduleMessage = this.formatRescheduleMessage(rescheduleContext);
     
-    await evolutionApi.sendMessage(
-      response.tenantId,
-      response.phone,
-      rescheduleMessage
-    );
+    await evolutionAPI.sendMessage({
+      number: response.phone,
+      text: rescheduleMessage
+    });
     
     // Registrar métrica de solicitação de remarcação
     MetricsHelper.incrementRescheduleRequested(response.tenantId);
@@ -155,11 +153,10 @@ export class NoShowHandler {
       `❌ *NÃO* - se precisar remarcar\n\n` +
       `Aguardo sua confirmação! 😊`;
     
-    await evolutionApi.sendMessage(
-      response.tenantId,
-      response.phone,
-      clarificationMessage
-    );
+    await evolutionAPI.sendMessage({
+      number: response.phone,
+      text: clarificationMessage
+    });
   }
 
   /**
@@ -220,11 +217,10 @@ export class NoShowHandler {
       `🌐 *Site:* www.syncbelle.com\n\n` +
       `Nossa equipe terá prazer em encontrar um novo horário para você! 😊`;
     
-    await evolutionApi.sendMessage(
-      response.tenantId,
-      response.phone,
-      genericMessage
-    );
+    await evolutionAPI.sendMessage({
+      number: response.phone,
+      text: genericMessage
+    });
   }
 
   /**

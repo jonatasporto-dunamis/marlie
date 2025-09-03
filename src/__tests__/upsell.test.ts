@@ -2,6 +2,7 @@ import { UpsellSelector } from '../upsell/selector';
 import { db } from '../db';
 import { MetricsHelper } from '../metrics';
 import { jest } from '@jest/globals';
+import { Pool } from 'pg';
 
 describe('Upsell System', () => {
   let upsellSelector: UpsellSelector;
@@ -17,13 +18,15 @@ describe('Upsell System', () => {
   };
 
   beforeEach(async () => {
-    upsellSelector = new UpsellSelector();
+    upsellSelector = new UpsellSelector(db as unknown as Pool);
     
     // Limpar dados de teste
-    await db.query('DELETE FROM upsell_events WHERE tenant_id = $1', [mockTenantId]);
+    if (db) {
+      await (db as unknown as Pool).query('DELETE FROM upsell_events WHERE tenant_id = $1', [mockTenantId]);
+    }
     
     // Mock das métricas
-    jest.spyOn(MetricsHelper, 'incrementUpsellOffered').mockImplementation(() => {});
+    jest.spyOn(MetricsHelper, 'incrementUpsellShown').mockImplementation(() => {});
     jest.spyOn(MetricsHelper, 'incrementUpsellAccepted').mockImplementation(() => {});
     jest.spyOn(MetricsHelper, 'recordUpsellRevenue').mockImplementation(() => {});
   });
@@ -34,12 +37,20 @@ describe('Upsell System', () => {
 
   describe('Contextual Selection', () => {
     it('should select appropriate upsell based on service context', async () => {
-      const upsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+      const context = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: mockConversationId
+      };
+      const upsell = await upsellSelector.selectUpsell(context);
       
       expect(upsell).toBeDefined();
-      expect(upsell?.servico_id).toBeDefined();
-      expect(upsell?.valor).toBeGreaterThan(0);
-      expect(upsell?.contexto).toContain('complementar');
+      expect(upsell?.suggestedServiceId).toBeDefined();
+      expect(upsell?.suggestedPriceCents).toBeGreaterThan(0);
+      expect(upsell?.reason).toContain('complementar');
     });
 
     it('should return null when no suitable upsell is available', async () => {
@@ -48,68 +59,93 @@ describe('Upsell System', () => {
         servico_id: 'non-existent-service'
       };
       
-      const upsell = await upsellSelector.selectUpsell(mockTenantId, invalidBookingData);
+      const invalidContext = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: 999, // non-existent service
+        baseServiceName: 'Non-existent Service',
+        appointmentDateTime: new Date(),
+        conversationId: mockConversationId
+      };
+      const upsell = await upsellSelector.selectUpsell(invalidContext);
       expect(upsell).toBeNull();
     });
   });
 
   describe('One Upsell Per Conversation Rule', () => {
     it('should offer upsell on first booking in conversation', async () => {
-      const upsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+      const context = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: mockConversationId
+      };
+      const upsell = await upsellSelector.selectUpsell(context);
       expect(upsell).toBeDefined();
       
       // Simular que o upsell foi oferecido
       if (upsell) {
-        await upsellSelector.recordUpsellOffered(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          upsell.servico_id,
-          upsell.valor
-        );
+        await upsellSelector.recordUpsellShown(context, upsell);
       }
     });
 
     it('should NOT offer second upsell in same conversation', async () => {
       // Primeiro upsell
-      const firstUpsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+      const firstContext = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: mockConversationId
+      };
+      const firstUpsell = await upsellSelector.selectUpsell(firstContext);
       if (firstUpsell) {
-        await upsellSelector.recordUpsellOffered(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          firstUpsell.servico_id,
-          firstUpsell.valor
-        );
+        await upsellSelector.recordUpsellShown(firstContext, firstUpsell);
       }
       
       // Tentar segundo upsell na mesma conversa
-      const secondBooking = {
-        ...mockBookingData,
-        servico_id: 'serv-2',
-        valor: 150
+      const secondContext = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: 2,
+        baseServiceName: 'Second Service',
+        appointmentDateTime: new Date(),
+        conversationId: mockConversationId
       };
       
-      const secondUpsell = await upsellSelector.selectUpsell(mockTenantId, secondBooking);
+      const secondUpsell = await upsellSelector.selectUpsell(secondContext);
       expect(secondUpsell).toBeNull();
     });
 
     it('should allow upsell in new conversation', async () => {
       // Primeiro upsell na conversa 1
-      const firstUpsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+      const firstContext = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: mockConversationId
+      };
+      const firstUpsell = await upsellSelector.selectUpsell(firstContext);
       if (firstUpsell) {
-        await upsellSelector.recordUpsellOffered(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          firstUpsell.servico_id,
-          firstUpsell.valor
-        );
+        await upsellSelector.recordUpsellShown(firstContext, firstUpsell);
       }
       
       // Nova conversa (diferente conversation_id)
       const newConversationId = 'conv-456';
-      const newUpsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+      const newContext = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: newConversationId
+      };
+      const newUpsell = await upsellSelector.selectUpsell(newContext);
       
       expect(newUpsell).toBeDefined();
     });
@@ -117,91 +153,86 @@ describe('Upsell System', () => {
 
   describe('Persistence and State Management', () => {
     it('should persist upsell offer in database', async () => {
-      const upsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+      const context = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: mockConversationId
+      };
+      const upsell = await upsellSelector.selectUpsell(context);
       
       if (upsell) {
-        await upsellSelector.recordUpsellOffered(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          upsell.servico_id,
-          upsell.valor
-        );
+        await upsellSelector.recordUpsellShown(context, upsell);
         
         // Verificar se foi persistido
-        const result = await db.query(
+        const result = await (db as unknown as Pool).query(
           'SELECT * FROM upsell_events WHERE tenant_id = $1 AND phone_e164 = $2 AND conversation_id = $3',
           [mockTenantId, mockPhone, mockConversationId]
         );
         
         expect(result.rows).toHaveLength(1);
-        expect(result.rows[0].event_type).toBe('offered');
-        expect(result.rows[0].servico_id).toBe(upsell.servico_id);
-        expect(parseFloat(result.rows[0].valor)).toBe(upsell.valor);
+        expect(result.rows[0].suggested_service_id).toBe(upsell.suggestedServiceId);
+        expect(result.rows[0].suggested_price_cents).toBe(upsell.suggestedPriceCents);
       }
     });
 
     it('should record upsell acceptance', async () => {
-      const upsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+      const context = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: mockConversationId
+      };
+      const upsell = await upsellSelector.selectUpsell(context);
       
       if (upsell) {
         // Oferecer upsell
-        await upsellSelector.recordUpsellOffered(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          upsell.servico_id,
-          upsell.valor
-        );
+        await upsellSelector.recordUpsellShown(context, upsell);
         
         // Aceitar upsell
-        await upsellSelector.recordUpsellAccepted(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          upsell.servico_id
-        );
+        await upsellSelector.recordUpsellResponse(context, upsell, true);
         
         // Verificar se foi registrado
-        const result = await db.query(
-          'SELECT * FROM upsell_events WHERE tenant_id = $1 AND phone_e164 = $2 AND event_type = $3',
-          [mockTenantId, mockPhone, 'accepted']
+        const result = await (db as unknown as Pool).query(
+          'SELECT * FROM upsell_events WHERE tenant_id = $1 AND phone_e164 = $2 AND accepted_at IS NOT NULL',
+          [mockTenantId, mockPhone]
         );
         
         expect(result.rows).toHaveLength(1);
-        expect(result.rows[0].servico_id).toBe(upsell.servico_id);
+        expect(result.rows[0].suggested_service_id).toBe(upsell.suggestedServiceId);
       }
     });
 
     it('should record upsell decline', async () => {
-      const upsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+      const context = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: mockConversationId
+      };
+      const upsell = await upsellSelector.selectUpsell(context);
       
       if (upsell) {
         // Oferecer upsell
-        await upsellSelector.recordUpsellOffered(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          upsell.servico_id,
-          upsell.valor
-        );
+        await upsellSelector.recordUpsellShown(context, upsell);
         
         // Recusar upsell
-        await upsellSelector.recordUpsellDeclined(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          upsell.servico_id
-        );
+        await upsellSelector.recordUpsellResponse(context, upsell, false);
         
         // Verificar se foi registrado
-        const result = await db.query(
-          'SELECT * FROM upsell_events WHERE tenant_id = $1 AND phone_e164 = $2 AND event_type = $3',
-          [mockTenantId, mockPhone, 'declined']
+        const result = await (db as unknown as Pool).query(
+          'SELECT * FROM upsell_events WHERE tenant_id = $1 AND phone_e164 = $2 AND declined_at IS NOT NULL',
+          [mockTenantId, mockPhone]
         );
         
         expect(result.rows).toHaveLength(1);
-        expect(result.rows[0].servico_id).toBe(upsell.servico_id);
+        expect(result.rows[0].suggested_service_id).toBe(upsell.suggestedServiceId);
       }
     });
   });
@@ -213,10 +244,18 @@ describe('Upsell System', () => {
     });
 
     it('should calculate increased ticket with accepted upsell', async () => {
-      const upsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+      const context = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: mockConversationId
+      };
+      const upsell = await upsellSelector.selectUpsell(context);
       
       if (upsell) {
-        const totalTicket = mockBookingData.valor + upsell.valor;
+        const totalTicket = mockBookingData.valor + (upsell.suggestedPriceCents / 100);
         const increase = (totalTicket - mockBookingData.valor) / mockBookingData.valor;
         
         expect(totalTicket).toBeGreaterThan(mockBookingData.valor);
@@ -226,30 +265,27 @@ describe('Upsell System', () => {
     });
 
     it('should track metrics for ticket impact analysis', async () => {
-      const upsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+      const context = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: mockConversationId
+      };
+      const upsell = await upsellSelector.selectUpsell(context);
       
       if (upsell) {
         // Simular oferta
-        await upsellSelector.recordUpsellOffered(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          upsell.servico_id,
-          upsell.valor
-        );
+        await upsellSelector.recordUpsellShown(context, upsell);
         
         // Simular aceitação
-        await upsellSelector.recordUpsellAccepted(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          upsell.servico_id
-        );
+        await upsellSelector.recordUpsellResponse(context, upsell, true);
         
         // Verificar se métricas foram chamadas
-        expect(MetricsHelper.incrementUpsellOffered).toHaveBeenCalledWith(mockTenantId);
+        expect(MetricsHelper.incrementUpsellShown).toHaveBeenCalledWith(mockTenantId);
         expect(MetricsHelper.incrementUpsellAccepted).toHaveBeenCalledWith(mockTenantId);
-        expect(MetricsHelper.recordUpsellRevenue).toHaveBeenCalledWith(mockTenantId, upsell.valor);
+        expect(MetricsHelper.recordUpsellRevenue).toHaveBeenCalledWith(mockTenantId, upsell.suggestedPriceCents);
       }
     });
 
@@ -259,25 +295,22 @@ describe('Upsell System', () => {
       
       for (let i = 0; i < attempts; i++) {
         const conversationId = `conv-${i}`;
-        const upsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+        const context = {
+          tenantId: mockTenantId,
+          phoneE164: mockPhone,
+          baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+          baseServiceName: 'Test Service',
+          appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+          conversationId
+        };
+        const upsell = await upsellSelector.selectUpsell(context);
         
         if (upsell) {
-          await upsellSelector.recordUpsellOffered(
-            mockTenantId,
-            mockPhone,
-            conversationId,
-            upsell.servico_id,
-            upsell.valor
-          );
+          await upsellSelector.recordUpsellShown(context, upsell);
           
           // Simular 50% de aceitação
           if (i % 2 === 0) {
-            await upsellSelector.recordUpsellAccepted(
-              mockTenantId,
-              mockPhone,
-              conversationId,
-              upsell.servico_id
-            );
+            await upsellSelector.recordUpsellResponse(context, upsell, true);
             acceptedCount++;
           }
         }
@@ -289,30 +322,25 @@ describe('Upsell System', () => {
     });
   });
 
-  describe('Timeout and Expiration', () => {
-    it('should respect upsell timeout', async () => {
-      const upsell = await upsellSelector.selectUpsell(mockTenantId, mockBookingData);
+  describe('Statistics and Analytics', () => {
+    it('should get upsell statistics', async () => {
+      const context = {
+        tenantId: mockTenantId,
+        phoneE164: mockPhone,
+        baseServiceId: parseInt(mockBookingData.servico_id.replace('serv-', '')),
+        baseServiceName: 'Test Service',
+        appointmentDateTime: new Date(mockBookingData.data_agendamento + 'T' + mockBookingData.horario),
+        conversationId: mockConversationId
+      };
+      const upsell = await upsellSelector.selectUpsell(context);
       
       if (upsell) {
-        await upsellSelector.recordUpsellOffered(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          upsell.servico_id,
-          upsell.valor
-        );
+        await upsellSelector.recordUpsellShown(context, upsell);
+        await upsellSelector.recordUpsellResponse(context, upsell, true);
         
-        // Simular timeout (5 minutos padrão)
-        const timeoutMs = 5 * 60 * 1000;
-        const isExpired = await upsellSelector.isUpsellExpired(
-          mockTenantId,
-          mockPhone,
-          mockConversationId,
-          timeoutMs
-        );
-        
-        // Como acabou de ser criado, não deve estar expirado
-        expect(isExpired).toBe(false);
+        const stats = await upsellSelector.getUpsellStats(mockTenantId, 30);
+        expect(stats).toBeDefined();
+        expect(stats.total_shown).toBeGreaterThan(0);
       }
     });
   });

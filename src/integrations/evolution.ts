@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { logger } from '../logger';
+import logger from '../utils/logger';
 
 /**
  * Interface for Evolution API message payload
@@ -138,3 +138,28 @@ export class EvolutionAPI {
 
 // Export singleton instance
 export const evolutionAPI = new EvolutionAPI();
+
+/**
+ * Convenience function to send a single message
+ * @param phone Phone number or message object
+ * @param message Message text (optional if phone is an EvolutionMessage)
+ * @returns Object with success status and error if applicable
+ */
+export const sendMessage = async (phone: string | EvolutionMessage, message?: string): Promise<{success: boolean, error?: any}> => {
+  try {
+    let msgObj: EvolutionMessage;
+    
+    if (typeof phone === 'string' && message) {
+      msgObj = { number: phone, text: message };
+    } else if (typeof phone === 'object') {
+      msgObj = phone;
+    } else {
+      throw new Error('Invalid parameters for sendMessage');
+    }
+    
+    const result = await evolutionAPI.sendMessage(msgObj);
+    return { success: result };
+  } catch (error) {
+    return { success: false, error };
+  }
+};

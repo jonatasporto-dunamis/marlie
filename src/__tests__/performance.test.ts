@@ -1,12 +1,12 @@
-import { MessageScheduler } from '../scheduler/worker';
+import { MessageScheduler } from '../services/scheduler';
 import { db } from '../db';
-import { EvolutionApiClient } from '../evolution/client';
+import { EvolutionAPI } from '../integrations/evolution';
 import { jest } from '@jest/globals';
 import { performance } from 'perf_hooks';
 
 // Mock do Evolution API Client
-jest.mock('../evolution/client');
-const mockEvolutionClient = EvolutionApiClient as jest.MockedClass<typeof EvolutionApiClient>;
+jest.mock('../integrations/evolution');
+const mockEvolutionClient = EvolutionAPI as jest.MockedClass<typeof EvolutionAPI>;
 
 describe('Performance Tests', () => {
   let scheduler: MessageScheduler;
@@ -22,12 +22,12 @@ describe('Performance Tests', () => {
     scheduler = new MessageScheduler();
     
     // Limpar dados de teste
-    await db.query('DELETE FROM message_jobs WHERE tenant_id = $1', [mockTenantId]);
+    await (db as any).query('DELETE FROM message_jobs WHERE tenant_id = $1', [mockTenantId]);
     
     // Mock rápido da API (simular resposta em 10ms)
-    mockEvolutionClient.prototype.sendMessage = jest.fn().mockImplementation(() => {
-      return new Promise(resolve => {
-        setTimeout(() => resolve({ success: true }), 10);
+    (mockEvolutionClient.prototype.sendMessage as jest.Mock) = jest.fn().mockImplementation(() => {
+      return new Promise<boolean>(resolve => {
+        setTimeout(() => resolve(true), 10);
       });
     });
   });
@@ -85,7 +85,7 @@ describe('Performance Tests', () => {
       expect(jobsPerMinute).toBeGreaterThanOrEqual(TARGET_JOBS_PER_MINUTE);
       
       // Verificar que jobs foram processados corretamente
-      const completedJobs = await db.query(
+      const completedJobs = await (db as any).query(
         'SELECT COUNT(*) FROM message_jobs WHERE tenant_id = $1 AND status = $2',
         [mockTenantId, 'completed']
       );
@@ -334,7 +334,7 @@ describe('Performance Tests', () => {
       const operations = [];
       for (let i = 0; i < 20; i++) {
         operations.push(
-          db.query('SELECT COUNT(*) FROM message_jobs WHERE tenant_id = $1', [mockTenantId])
+          (db as any).query('SELECT COUNT(*) FROM message_jobs WHERE tenant_id = $1', [mockTenantId])
         );
       }
       
@@ -358,13 +358,13 @@ describe('Performance Tests', () => {
     it('should handle API failures without significant performance degradation', async () => {
       // Mock falhas intermitentes na API
       let callCount = 0;
-      mockEvolutionClient.prototype.sendMessage = jest.fn().mockImplementation(() => {
+      (mockEvolutionClient.prototype.sendMessage as jest.Mock) = jest.fn().mockImplementation(() => {
         callCount++;
         if (callCount % 3 === 0) {
           return Promise.reject(new Error('API temporarily unavailable'));
         }
-        return new Promise(resolve => {
-          setTimeout(() => resolve({ success: true }), 10);
+        return new Promise<boolean>(resolve => {
+          setTimeout(() => resolve(true), 10);
         });
       });
       
@@ -398,12 +398,12 @@ describe('Performance Tests', () => {
       const processingTime = processingEnd - processingStart;
       
       // Verificar resultados
-      const completedJobs = await db.query(
+      const completedJobs = await (db as any).query(
         'SELECT COUNT(*) FROM message_jobs WHERE tenant_id = $1 AND status = $2',
         [mockTenantId, 'completed']
       );
       
-      const failedJobs = await db.query(
+      const failedJobs = await (db as any).query(
         'SELECT COUNT(*) FROM message_jobs WHERE tenant_id = $1 AND status = $2',
         [mockTenantId, 'failed']
       );
@@ -428,13 +428,13 @@ async function simulateConversationOperations(): Promise<void> {
   // Simular operações típicas de uma conversa
   const operations = [
     // Consulta ao banco
-    db.query('SELECT 1'),
+    (db as any).query('SELECT 1'),
     
     // Processamento de texto (simular)
     new Promise(resolve => setTimeout(resolve, Math.random() * 10)),
     
     // Outra consulta
-    db.query('SELECT COUNT(*) FROM message_jobs LIMIT 1'),
+    (db as any).query('SELECT COUNT(*) FROM message_jobs LIMIT 1'),
     
     // Mais processamento
     new Promise(resolve => setTimeout(resolve, Math.random() * 5))

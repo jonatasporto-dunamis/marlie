@@ -432,6 +432,28 @@ export const MetricsHelper = {
     } catch (error) {
       logger.warn('Failed to increment user_opt_out_total:', error);
     }
+  },
+
+  recordHttpRequestDuration(method: string, path: string, statusCode: number, duration: number) {
+    // This is a placeholder implementation since we don't have an HTTP request duration histogram defined
+    // In a real implementation, you would create a histogram metric and record the duration
+    try {
+      logger.debug(`HTTP ${method} ${path} ${statusCode} took ${duration}ms`);
+    } catch (error) {
+      logger.warn('Failed to record HTTP request duration:', error);
+    }
+  },
+
+  recordUpsellRevenue(tenantId: string, revenueCents: number) {
+    try {
+      ticketValueHistogram.observe(
+        { tenant_id: tenantId, has_upsell: 'true' },
+        revenueCents
+      );
+      logger.info(`Recorded upsell revenue: ${revenueCents} cents for tenant ${tenantId}`);
+    } catch (error) {
+      logger.error('Error recording upsell revenue:', error);
+    }
   }
 };
 

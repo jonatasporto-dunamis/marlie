@@ -1,13 +1,13 @@
-import { MessageScheduler } from '../scheduler/worker';
-import { OptOutService } from '../scheduler/opt-out';
+import { MessageScheduler } from '../services/scheduler';
+import { OptOutService } from '../services/opt-out';
 import { db } from '../db';
-import { EvolutionApiClient } from '../evolution/client';
+import { EvolutionAPI } from '../integrations/evolution';
 import { MetricsHelper } from '../metrics';
 import { jest } from '@jest/globals';
 
 // Mock do Evolution API Client
-jest.mock('../evolution/client');
-const mockEvolutionClient = EvolutionApiClient as jest.MockedClass<typeof EvolutionApiClient>;
+jest.mock('../integrations/evolution');
+const mockEvolutionClient = EvolutionAPI as jest.MockedClass<typeof EvolutionAPI>;
 
 describe('Message Scheduler System', () => {
   let scheduler: MessageScheduler;
@@ -19,11 +19,11 @@ describe('Message Scheduler System', () => {
 
   beforeEach(async () => {
     scheduler = new MessageScheduler();
-    optOutService = new OptOutService();
+    optOutService = new OptOutService(db as any, mockEvolutionClient as any);
     
     // Limpar dados de teste
-    await db.query('DELETE FROM message_jobs WHERE tenant_id = $1', [mockTenantId]);
-    await db.query('DELETE FROM user_opt_outs WHERE tenant_id = $1', [mockTenantId]);
+    await (db as any).query('DELETE FROM message_jobs WHERE tenant_id = $1', [mockTenantId]);
+    await (db as any).query('DELETE FROM user_opt_outs WHERE tenant_id = $1', [mockTenantId]);
     
     // Mock das métricas
     jest.spyOn(MetricsHelper, 'incrementPreVisitSent').mockImplementation(() => {});
@@ -32,7 +32,7 @@ describe('Message Scheduler System', () => {
     jest.spyOn(MetricsHelper, 'incrementUserOptOut').mockImplementation(() => {});
     
     // Mock do Evolution API
-    mockEvolutionClient.prototype.sendMessage = jest.fn().mockResolvedValue({ success: true });
+    jest.spyOn(mockEvolutionClient.prototype, 'sendMessage').mockResolvedValue({ success: true } as any);
   });
 
   afterEach(() => {
@@ -62,7 +62,7 @@ describe('Message Scheduler System', () => {
       expect(jobId).toBeDefined();
       
       // Verificar se foi criado no banco
-      const result = await db.query(
+      const result = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = $1',
         [jobId]
       );
@@ -96,7 +96,7 @@ describe('Message Scheduler System', () => {
       expect(jobId).toBeDefined();
       
       // Verificar se foi criado no banco
-      const result = await db.query(
+      const result = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = $1',
         [jobId]
       );
@@ -150,7 +150,7 @@ describe('Message Scheduler System', () => {
       expect(jobId2).toBeNull();
       
       // Verificar que só existe um job
-      const result = await db.query(
+      const result = await (db as any).query(
         'SELECT * FROM message_jobs WHERE booking_id = $1 AND job_type = $2',
         [mockBookingId, 'pre_visit']
       );
@@ -184,7 +184,7 @@ describe('Message Scheduler System', () => {
       expect(processedCount).toBe(1);
       
       // Verificar se job foi marcado como completed
-      const result = await db.query(
+      const result = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = $1',
         [jobId]
       );
@@ -221,7 +221,7 @@ describe('Message Scheduler System', () => {
       expect(processedCount).toBe(1);
       
       // Verificar se job foi marcado como completed
-      const result = await db.query(
+      const result = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = $1',
         [jobId]
       );
@@ -264,13 +264,13 @@ describe('Message Scheduler System', () => {
       expect(processedCount).toBe(5);
       
       // Verificar se todos foram processados
-      const result = await db.query(
+      const result = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = ANY($1)',
         [jobIds]
       );
       
       expect(result.rows).toHaveLength(5);
-      result.rows.forEach(job => {
+      result.rows.forEach((job: any) => {
         expect(job.status).toBe('completed');
       });
     });
@@ -279,7 +279,7 @@ describe('Message Scheduler System', () => {
   describe('Retry Logic', () => {
     it('should retry failed jobs up to max attempts', async () => {
       // Mock falha na API
-      mockEvolutionClient.prototype.sendMessage = jest.fn().mockRejectedValue(new Error('API Error'));
+      jest.spyOn(mockEvolutionClient.prototype, 'sendMessage').mockRejectedValue(new Error('API Error') as any);
       
       // Criar job
       const scheduledFor = new Date(Date.now() - 1000);
@@ -303,7 +303,7 @@ describe('Message Scheduler System', () => {
       await scheduler.processPendingJobs();
       
       // Verificar se job foi marcado como failed e retry_count incrementado
-      const result = await db.query(
+      const result = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = $1',
         [jobId]
       );
@@ -315,7 +315,7 @@ describe('Message Scheduler System', () => {
 
     it('should mark job as permanently failed after max retries', async () => {
       // Mock falha na API
-      mockEvolutionClient.prototype.sendMessage = jest.fn().mockRejectedValue(new Error('Persistent Error'));
+      jest.spyOn(mockEvolutionClient.prototype, 'sendMessage').mockRejectedValue(new Error('Persistent Error') as any);
       
       // Criar job e simular múltiplas tentativas
       const scheduledFor = new Date(Date.now() - 1000);
@@ -341,7 +341,7 @@ describe('Message Scheduler System', () => {
       }
       
       // Verificar se job foi marcado como permanently failed
-      const result = await db.query(
+      const result = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = $1',
         [jobId]
       );
@@ -352,9 +352,9 @@ describe('Message Scheduler System', () => {
 
     it('should succeed on retry after initial failure', async () => {
       // Mock falha na primeira tentativa, sucesso na segunda
-      mockEvolutionClient.prototype.sendMessage = jest.fn()
-        .mockRejectedValueOnce(new Error('Temporary Error'))
-        .mockResolvedValueOnce({ success: true });
+      jest.spyOn(mockEvolutionClient.prototype, 'sendMessage')
+          .mockRejectedValueOnce(new Error('Temporary Error') as any)
+          .mockResolvedValueOnce({ success: true } as any);
       
       // Criar job
       const scheduledFor = new Date(Date.now() - 1000);
@@ -381,7 +381,7 @@ describe('Message Scheduler System', () => {
       await scheduler.processPendingJobs();
       
       // Verificar se job foi marcado como completed
-      const result = await db.query(
+      const result = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = $1',
         [jobId]
       );
@@ -394,7 +394,7 @@ describe('Message Scheduler System', () => {
   describe('Opt-out Respect', () => {
     it('should not send message to opted-out user', async () => {
       // Registrar opt-out
-      await optOutService.addOptOut(mockTenantId, mockPhone, 'all');
+      await optOutService.registerOptOut(mockTenantId, mockPhone, 'all');
       
       // Criar job
       const scheduledFor = new Date(Date.now() - 1000);
@@ -419,7 +419,7 @@ describe('Message Scheduler System', () => {
       expect(processedCount).toBe(1);
       
       // Verificar se job foi marcado como skipped
-      const result = await db.query(
+      const result = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = $1',
         [jobId]
       );
@@ -433,7 +433,7 @@ describe('Message Scheduler System', () => {
 
     it('should respect specific opt-out types', async () => {
       // Registrar opt-out apenas para pre_visit
-      await optOutService.addOptOut(mockTenantId, mockPhone, 'pre_visit');
+      await optOutService.registerOptOut(mockTenantId, mockPhone, 'pre_visit');
       
       // Criar job pre_visit
       const scheduledFor = new Date(Date.now() - 1000);
@@ -472,12 +472,12 @@ describe('Message Scheduler System', () => {
       await scheduler.processPendingJobs();
       
       // Verificar resultados
-      const preVisitResult = await db.query(
+      const preVisitResult = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = $1',
         [preVisitJobId]
       );
       
-      const noShowResult = await db.query(
+      const noShowResult = await (db as any).query(
         'SELECT * FROM message_jobs WHERE id = $1',
         [noShowJobId]
       );
@@ -522,7 +522,7 @@ describe('Message Scheduler System', () => {
       expect(processedCount).toBe(batchSize);
       
       // Verificar que apenas batch size jobs foram processados
-      const completedResult = await db.query(
+      const completedResult = await (db as any).query(
         'SELECT COUNT(*) FROM message_jobs WHERE status = $1',
         ['completed']
       );

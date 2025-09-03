@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
-import { Redis } from 'ioredis';
+import { RedisClientType } from 'redis';
 import logger from '../utils/logger';
-import { criarAgendamento } from '../integrations/trinks';
+import { Trinks } from '../integrations/trinks';
 import { updateUserPreferences, updateSlotPopularity } from '../recommendation/recommend';
 import { MetricsHelper } from '../metrics/index';
 import { sendPostBookingMessage, scheduleReminder } from '../messages/templates';
@@ -46,7 +46,7 @@ interface UpsellResponse {
  */
 export async function createBookingWithCTAs(
   db: Pool,
-  redis: Redis,
+  redis: RedisClientType,
   bookingData: BookingData,
   ctas: PostBookingCTAs = { reminder: true, location: true, payment: true }
 ): Promise<BookingResult> {
@@ -54,13 +54,16 @@ export async function createBookingWithCTAs(
   
   try {
     // 1. Criar agendamento via Trinks
-    const trinksResult = await criarAgendamento({
-      telefone: bookingData.phone,
-      servicoId: bookingData.serviceId,
-      profissionalId: bookingData.professionalId,
-      data: bookingData.dateISO,
-      horario: bookingData.timeISO,
-      nomeCliente: bookingData.clientName
+    const trinksResult = await Trinks.criarAgendamento({
+      servicoId: parseInt(bookingData.serviceId),
+      clienteId: 1, // TODO: Get actual client ID
+      dataHoraInicio: `${bookingData.dateISO}T${bookingData.timeISO}`,
+      duracaoEmMinutos: 60, // TODO: Get actual duration
+      valor: bookingData.estimatedPrice || 0,
+      confirmado: true,
+      observacoes: bookingData.clientName,
+      profissionalId: bookingData.professionalId ? parseInt(bookingData.professionalId) : undefined,
+      telefone: bookingData.phone
     });
     
     if (!trinksResult.success) {
@@ -265,7 +268,7 @@ async function handleUpsellFlow(
 
     // Present upsell to user
     const upsellMessage = formatUpsellMessage(suggestion);
-    await sendUpsellMessage(bookingData.phone, upsellMessage);
+    await sendUpsellMessage(bookingData.phone, upsellMessage, bookingId, bookingData.serviceId, bookingData.timeISO);
 
     // Wait for user response (this would be handled by webhook in real implementation)
     // For now, we'll simulate a response or handle it asynchronously
@@ -307,10 +310,16 @@ function formatUpsellMessage(suggestion: UpsellSuggestion): string {
 /**
  * Sends upsell message to user
  */
-async function sendUpsellMessage(phone: string, message: string): Promise<void> {
+async function sendUpsellMessage(phone: string, message: string, bookingId: string, serviceId: string, timeISO: string): Promise<void> {
   try {
     // This would integrate with your messaging service (Evolution API)
-    await sendPostBookingMessage(phone, message, { isUpsell: true });
+    await sendPostBookingMessage(phone, message, { 
+      bookingId,
+      serviceId,
+      timeISO,
+      ctaButtons: [],
+      isUpsell: true 
+    });
   } catch (error) {
     logger.error('Error sending upsell message:', error);
   }

@@ -1,5 +1,5 @@
-import { Pool } from 'pg';
-import { logger } from '../logger';
+import { Pool, Client } from 'pg';
+import logger from '../utils/logger';
 import { MetricsHelper } from '../metrics';
 import { EvolutionAPI } from '../integrations/evolution';
 
@@ -23,7 +23,7 @@ export interface UserOptOut {
  */
 export class OptOutService {
   constructor(
-    private db: Pool,
+    private db: Pool | Client,
     private evolutionAPI: EvolutionAPI
   ) {}
 

@@ -1,5 +1,5 @@
 import { Pool } from 'pg';
-import { logger } from '../logger';
+import { logger } from '../utils/logger';
 import { maskPhone } from '../utils/privacy';
 
 export interface UpsellCandidate {

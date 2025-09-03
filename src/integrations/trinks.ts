@@ -132,7 +132,7 @@ export const Trinks = {
   }) {
     // Try cache first
     try {
-      const cached = await redis.get(CACHE_KEYS.SERVICOS);
+      const cached = redis ? await redis.get(CACHE_KEYS.SERVICOS) : null;
       if (cached) {
         logger.debug('Returning cached servicos from Trinks');
         return JSON.parse(cached);
@@ -149,8 +149,10 @@ export const Trinks = {
       
       // Cache the result
       try {
-        await redis.setex(CACHE_KEYS.SERVICOS, CACHE_TTL.SERVICOS, JSON.stringify(data));
-        logger.debug('Cached servicos from Trinks');
+        if (redis) {
+          await redis.setEx(CACHE_KEYS.SERVICOS, CACHE_TTL.SERVICOS, JSON.stringify(data));
+          logger.debug('Cached servicos from Trinks');
+        }
       } catch (error) {
         logger.warn('Failed to cache servicos:', error);
       }
@@ -169,7 +171,7 @@ export const Trinks = {
     
     // Try cache first
     try {
-      const cached = await redis.get(cacheKey);
+      const cached = redis ? await redis.get(cacheKey) : null;
       if (cached) {
         logger.debug(`Returning cached agenda for professional ${params.profissionalId || 'all'}`);
         return JSON.parse(cached);
@@ -195,8 +197,10 @@ export const Trinks = {
       
       // Cache the result
       try {
-        await redis.setex(cacheKey, CACHE_TTL.AGENDA, JSON.stringify(data));
-        logger.debug(`Cached agenda for professional ${params.profissionalId || 'all'}`);
+        if (redis) {
+          await redis.setEx(cacheKey, CACHE_TTL.AGENDA, JSON.stringify(data));
+          logger.debug(`Cached agenda for professional ${params.profissionalId || 'all'}`);
+        }
       } catch (error) {
         logger.warn('Failed to cache agenda:', error);
       }
@@ -284,12 +288,12 @@ export const Trinks = {
     telefone?: string;
   }) {
     // Generate idempotency key
-    const idempotencyKey = generateBookingIdempotencyKey({
-      telefone: data.telefone || '',
-      servicoId: data.servicoId.toString(),
-      data: data.dataHoraInicio.split('T')[0],
-      horario: data.dataHoraInicio.split('T')[1]?.substring(0, 5) || ''
-    });
+    const idempotencyKey = generateBookingIdempotencyKey(
+      data.telefone || '',
+      data.servicoId,
+      data.dataHoraInicio.split('T')[0],
+      data.dataHoraInicio.split('T')[1]?.substring(0, 5) || ''
+    );
     
     // Use idempotency wrapper
     return withIdempotency(
@@ -307,12 +311,14 @@ export const Trinks = {
           
           // Invalidate related cache entries
           try {
-            const agendaCacheKey = CACHE_KEYS.AGENDA(
-              data.profissionalId?.toString() || 'all', 
-              data.dataHoraInicio.split('T')[0]
-            );
-            await redis.del(agendaCacheKey);
-            logger.debug(`Invalidated agenda cache for professional ${data.profissionalId || 'all'}`);
+            if (redis) {
+              const agendaCacheKey = CACHE_KEYS.AGENDA(
+                data.profissionalId?.toString() || 'all', 
+                data.dataHoraInicio.split('T')[0]
+              );
+              await redis.del(agendaCacheKey);
+              logger.debug(`Invalidated agenda cache for professional ${data.profissionalId || 'all'}`);
+            }
           } catch (error) {
             logger.warn('Failed to invalidate agenda cache:', error);
           }
@@ -320,7 +326,7 @@ export const Trinks = {
           return res.data;
         }, 'POST');
       },
-      30 * 60 // 30 minutes TTL
+      { ttl: 30 * 60 } // 30 minutes TTL
     );
   },
 };

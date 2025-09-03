@@ -776,4 +776,5 @@ export async function releaseIdempotencyKey(key: string): Promise<void> {
 }
 
 // Export pg client for direct database access
-export { pg };
+export { pg, redis };
+export const db = pg;

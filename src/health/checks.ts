@@ -83,6 +83,10 @@ export async function checkRedis(): Promise<HealthCheckResult> {
   const startTime = Date.now();
   
   try {
+    if (!redis) {
+      throw new Error('Redis client not initialized');
+    }
+    
     // Test Redis connectivity with ping
     const pingResult = await redis.ping();
     
@@ -91,9 +95,9 @@ export async function checkRedis(): Promise<HealthCheckResult> {
       const testKey = `health_check:${Date.now()}`;
       const testValue = 'health_test';
       
-      await redis.setex(testKey, 10, testValue); // 10 seconds TTL
-      const retrievedValue = await redis.get(testKey);
-      await redis.del(testKey); // Cleanup
+      await redis!.setEx(testKey, 10, testValue); // 10 seconds TTL
+      const retrievedValue = await redis!.get(testKey);
+      await redis!.del(testKey); // Cleanup
       
       const duration = Date.now() - startTime;
       

@@ -26,3 +26,6 @@ export async function chatCompletion(messages: ChatMessage[], model?: string) {
   const text = resp.data?.choices?.[0]?.message?.content || '';
   return text;
 }
+
+// Alias for backward compatibility
+export const callLLM = chatCompletion;

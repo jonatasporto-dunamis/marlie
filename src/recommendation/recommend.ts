@@ -1,7 +1,7 @@
 import { Pool } from 'pg';
-import { Redis } from 'ioredis';
+import { RedisClientType } from 'redis';
 import logger from '../utils/logger';
-import { buscarAgendaPorProfissional, buscarServicos } from '../integrations/trinks';
+import { Trinks } from '../integrations/trinks';
 import { MetricsHelper } from '../metrics/index';
 
 interface UserPreferences {
@@ -289,7 +289,7 @@ function generateTimeSlots(
  */
 export async function recommendSlots(
   db: Pool,
-  redis: Redis,
+  redis: RedisClientType,
   params: RecommendSlotsParams
 ): Promise<RecommendedSlot[]> {
   const startTime = Date.now();
@@ -310,7 +310,12 @@ export async function recommendSlots(
     
     if (professionalId) {
       try {
-        const agenda = await buscarAgendaPorProfissional(professionalId, dateISO);
+        const agenda = await Trinks.buscarAgendaPorProfissional({
+          data: dateISO,
+          servicoId: params.serviceId || '1',
+          servicoDuracao: '60',
+          profissionalId: professionalId
+        });
         
         // Assumir que agenda retorna slots ocupados, então os não listados estão disponíveis
         const occupiedSlots = new Set(agenda.map((item: any) => item.timeISO));

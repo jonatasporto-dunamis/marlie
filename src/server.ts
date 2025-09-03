@@ -132,33 +132,38 @@ app.post('/webhooks/evolution', webhookRateLimit, webhookAuth, webhookDedupe, as
       // Check for opt-out/opt-in messages first
       if (text && number) {
         const { OptOutService } = await import('./services/opt-out');
-        const { db } = await import('./db/index');
+        const { pg } = await import('./db/index');
         const { EvolutionAPI } = await import('./integrations/evolution');
         
-        const evolutionAPI = new EvolutionAPI();
-        const optOutService = new OptOutService(db, evolutionAPI);
-        
-        // Handle opt-out messages (PARAR, STOP, etc.)
-        const wasOptOut = await optOutService.processOptOutMessage('default', number, text);
-        if (wasOptOut) {
-          res.status(200).json({ received: true, handled: 'opt_out' });
-          return;
-        }
-        
-        // Handle opt-in messages (VOLTAR, etc.)
-        const wasOptIn = await optOutService.processOptInMessage('default', number, text);
-        if (wasOptIn) {
-          res.status(200).json({ received: true, handled: 'opt_in' });
-          return;
-        }
-        
-        // Check if user is opted out before processing normal messages
-        const isOptedOut = await optOutService.isUserOptedOut('default', number);
-        if (isOptedOut) {
-          // User is opted out, don't process the message
-          res.status(200).json({ received: true, handled: 'opted_out' });
-          return;
-        }
+        if (!pg) {
+           logger.warn('Database not initialized, skipping opt-out check');
+           // Continue with normal processing
+         } else {
+           const evolutionAPI = new EvolutionAPI();
+           const optOutService = new OptOutService(pg, evolutionAPI);
+           
+           // Handle opt-out messages (PARAR, STOP, etc.)
+           const wasOptOut = await optOutService.processOptOutMessage('default', number, text);
+           if (wasOptOut) {
+             res.status(200).json({ received: true, handled: 'opt_out' });
+             return;
+           }
+           
+           // Handle opt-in messages (VOLTAR, etc.)
+           const wasOptIn = await optOutService.processOptInMessage('default', number, text);
+           if (wasOptIn) {
+             res.status(200).json({ received: true, handled: 'opt_in' });
+             return;
+           }
+           
+           // Check if user is opted out before processing normal messages
+           const isOptedOut = await optOutService.isUserOptedOut('default', number);
+           if (isOptedOut) {
+             // User is opted out, don't process the message
+             res.status(200).json({ received: true, handled: 'opted_out' });
+             return;
+           }
+         }
       }
       messageId = String(payload?.data?.key?.id || payload?.data?.message?.key?.id || payload?.data?.stanzaId || payload?.data?.messageTimestamp || '') || undefined;
     }
