@@ -92,7 +92,7 @@ export class ValidationService {
     
     // 1. Verifica se é ambíguo
     if (this.isAmbiguousQuery(normalizedQuery)) {
-      const suggestions = await this.catalogService.searchServices(query, tenantId, 3);
+      const suggestions = await this.catalogService.searchTopServices(query, tenantId, 3);
       return {
         isValid: false,
         reason: 'Consulta muito ambígua, precisa de clarificação',
@@ -103,7 +103,7 @@ export class ValidationService {
     }
     
     // 2. Busca serviços correspondentes
-    const searchResults = await this.catalogService.searchServices(query, tenantId, 5);
+    const searchResults = await this.catalogService.searchTopServices(query, tenantId, 5);
     
     if (!searchResults || searchResults.length === 0) {
       return {

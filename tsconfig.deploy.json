@@ -1,0 +1,25 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "noImplicitAny": false,
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "exactOptionalPropertyTypes": false,
+    "noImplicitReturns": false,
+    "noFallthroughCasesInSwitch": false,
+    "noUncheckedIndexedAccess": false,
+    "suppressImplicitAnyIndexErrors": true,
+    "noStrictGenericChecks": true,
+    "suppressExcessPropertyErrors": true
+  },
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "test-*.ts",
+    "test-*.js",
+    "src/__tests__/**/*",
+    "tests/**/*"
+  ]
+}

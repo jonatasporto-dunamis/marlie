@@ -66,7 +66,7 @@ export class HumanHandoffService {
       const redisKey = `${this.HANDOFF_KEY_PREFIX}${phone}`;
       const ttlSeconds = effectiveTtl * 3600;
       
-      await this.redis.setex(
+      await this.redis.setEx(
         redisKey,
         ttlSeconds,
         JSON.stringify(handoffData)
@@ -132,7 +132,7 @@ export class HumanHandoffService {
       
       if (handoffData) {
         try {
-          const status: HandoffStatus = JSON.parse(handoffData);
+          const status: HandoffStatus = JSON.parse(handoffData as string);
           
           // Check if expired
           if (status.expiresAt && new Date() > new Date(status.expiresAt)) {
@@ -191,7 +191,7 @@ export class HumanHandoffService {
   ): Promise<boolean> {
     try {
       const ttlSeconds = ttlHours * 3600;
-      await this.redis.setex(this.GLOBAL_HANDOFF_KEY, ttlSeconds, 'true');
+      await this.redis.setEx(this.GLOBAL_HANDOFF_KEY, ttlSeconds, 'true');
       
       logger.warn(`Global handoff enabled by ${enabledBy} for ${ttlHours}h`);
       
@@ -245,7 +245,7 @@ export class HumanHandoffService {
         const data = await this.redis.get(key);
         if (data) {
           try {
-            const status: HandoffStatus = JSON.parse(data);
+            const status: HandoffStatus = JSON.parse(data as string);
             
             // Check if expired
             if (status.expiresAt && new Date() > new Date(status.expiresAt)) {
@@ -283,7 +283,7 @@ export class HumanHandoffService {
         const data = await this.redis.get(key);
         if (data) {
           try {
-            const status: HandoffStatus = JSON.parse(data);
+            const status: HandoffStatus = JSON.parse(data as string);
             
             if (status.expiresAt && now > new Date(status.expiresAt)) {
               await this.redis.del(key);

@@ -37,7 +37,7 @@ export class MessageBuffer {
     
     try {
       // Acquire lock to prevent race conditions
-      const lockAcquired = await this.redis.set(lockKey, '1', 'EX', 5, 'NX');
+      const lockAcquired = await this.redis.set(lockKey, '1', { EX: 5, NX: true });
       if (!lockAcquired) {
         logger.warn(`Failed to acquire lock for phone ${message.phone}`);
         return null;
@@ -68,7 +68,7 @@ export class MessageBuffer {
       bufferedMessages.push(message);
       
       // Update buffer with TTL
-      await this.redis.setex(
+      await this.redis.setEx(
         bufferKey, 
         this.DEFAULT_TTL, 
         JSON.stringify(bufferedMessages)
@@ -184,7 +184,7 @@ export class MessageBuffer {
             cleanedCount++;
           } else if (validMessages.length < messages.length) {
             // Update buffer with only valid messages
-            await this.redis.setex(key, this.DEFAULT_TTL, JSON.stringify(validMessages));
+            await this.redis.setEx(key, this.DEFAULT_TTL, JSON.stringify(validMessages));
           }
         } catch (error) {
           // Invalid buffer, delete it

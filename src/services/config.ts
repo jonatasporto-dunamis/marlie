@@ -508,7 +508,7 @@ class ConfigService {
     
     // Limpar cache Redis (padrão config:*)
     try {
-      const redis = getRedis();
+      const redis = await getRedis();
       if (redis) {
         const keys = await redis.keys('config:*');
         if (keys.length > 0) {
