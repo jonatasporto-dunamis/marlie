@@ -10,6 +10,8 @@ import logger from './utils/logger';
 import { adminAuth, adminRateLimit, auditLogger, webhookAuth, webhookRateLimit, webhookDedupe } from './middleware/security';
 import { metricsMiddleware, metricsHandler, incrementConversationsStarted, incrementServiceSuggestions, incrementBookingsConfirmed, incrementTrinksErrors } from './middleware/metrics';
 import { healthHandler, readyHandler } from './middleware/health';
+import { getRedis } from './infra/redis';
+import { pool } from './infra/db';
 
 export const app = express();
 
@@ -530,11 +532,25 @@ if (process.env.NODE_ENV !== 'test') {
   const databaseSsl: boolean | 'no-verify' | undefined =
     sslMode === 'no-verify' ? 'no-verify' : (sslMode === 'true' || sslMode === '1' ? true : undefined);
 
+  // Inicializar Redis e DB no boot
+  async function initializeServices() {
+    try {
+      await getRedis(); // tenta conectar uma vez no start
+      await pool.query('SELECT 1'); // valida PG também
+      logger.info('Redis e PostgreSQL conectados com sucesso');
+    } catch (error) {
+      logger.error('Erro ao conectar serviços:', error);
+    }
+  }
+
   initPersistence({
     redisUrl: env.REDIS_URL || null,
     databaseUrl: env.DATABASE_URL || null,
     databaseSsl,
-  }).then(() => {
+  }).then(async () => {
+    // Inicializar serviços
+    await initializeServices();
+    
     // Configurar limpeza automática de estados expirados a cada hora
     setInterval(async () => {
       try {

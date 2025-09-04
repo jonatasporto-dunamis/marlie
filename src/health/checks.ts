@@ -1,5 +1,5 @@
-import { Pool } from 'pg';
-import { redis } from '../db/index';
+import { pingRedis } from '../infra/redis';
+import { pool } from '../infra/db';
 import axios from 'axios';
 import logger from '../utils/logger';
 
@@ -30,28 +30,16 @@ export async function checkDatabase(): Promise<HealthCheckResult> {
   const startTime = Date.now();
   
   try {
-    // Simple query to check database connectivity
-    const { Pool } = require('pg');
-    const pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      max: 1, // Only one connection for health check
-      connectionTimeoutMillis: 5000,
-    });
-    
-    const client = await pool.connect();
-    const result = await client.query('SELECT 1 as health_check');
-    client.release();
-    await pool.end();
-    
+    const { rows } = await pool.query('SELECT 1 as health_check');
     const duration = Date.now() - startTime;
     
-    if (result.rows[0]?.health_check === 1) {
+    if (rows?.[0]?.health_check === 1) {
       return {
         status: 'healthy',
         timestamp: new Date().toISOString(),
         duration_ms: duration,
         details: {
-          query_result: result.rows[0],
+          query_result: rows[0],
           connection_time_ms: duration
         }
       };
@@ -83,49 +71,24 @@ export async function checkRedis(): Promise<HealthCheckResult> {
   const startTime = Date.now();
   
   try {
-    if (!redis) {
-      throw new Error('Redis client not initialized');
-    }
+    const isHealthy = await pingRedis();
+    const duration = Date.now() - startTime;
     
-    // Test Redis connectivity with ping
-    const pingResult = await redis.ping();
-    
-    if (pingResult === 'PONG') {
-      // Test set/get operation
-      const testKey = `health_check:${Date.now()}`;
-      const testValue = 'health_test';
-      
-      await redis!.setEx(testKey, 10, testValue); // 10 seconds TTL
-      const retrievedValue = await redis!.get(testKey);
-      await redis!.del(testKey); // Cleanup
-      
-      const duration = Date.now() - startTime;
-      
-      if (retrievedValue === testValue) {
-        return {
-          status: 'healthy',
-          timestamp: new Date().toISOString(),
-          duration_ms: duration,
-          details: {
-            ping_result: pingResult,
-            set_get_test: 'passed'
-          }
-        };
-      } else {
-        return {
-          status: 'degraded',
-          timestamp: new Date().toISOString(),
-          duration_ms: duration,
-          error: 'Set/Get operation failed'
-        };
-      }
+    if (isHealthy) {
+      return {
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        duration_ms: duration,
+        details: {
+          ping_result: 'PONG'
+        }
+      };
     } else {
-      const duration = Date.now() - startTime;
       return {
         status: 'unhealthy',
         timestamp: new Date().toISOString(),
         duration_ms: duration,
-        error: `Unexpected ping result: ${pingResult}`
+        error: 'Redis ping failed'
       };
     }
   } catch (error) {
