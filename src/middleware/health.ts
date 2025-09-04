@@ -1,9 +1,9 @@
 import { Request, Response } from 'express';
-import { Pool } from 'pg';
 import { createClient } from 'redis';
 import axios from 'axios';
 import logger from '../utils/logger';
 import { performHealthChecks, performReadinessCheck } from '../health/checks';
+import { pool } from '../infra/db';
 
 interface HealthCheck {
   status: 'healthy' | 'unhealthy' | 'degraded';
@@ -37,15 +37,9 @@ async function checkDatabase(): Promise<HealthCheck> {
       };
     }
 
-    const pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false
-    });
-
     const client = await pool.connect();
     await client.query('SELECT 1');
     client.release();
-    await pool.end();
 
     return {
       status: 'healthy',
