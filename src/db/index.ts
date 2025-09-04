@@ -1,5 +1,6 @@
 import { createClient as createRedisClient, RedisClientType } from 'redis';
 import { Client as PgClient } from 'pg';
+import { pool } from '../infra/db';
 import logger from '../utils/logger';
 
 const LEGACY_FALLBACK_ENABLED = process.env.LEGACY_FALLBACK_ENABLED !== 'false';
@@ -24,8 +25,6 @@ export type ConversationState = {
 };
 
 let redis: RedisClientType | null = null;
-let pg: PgClient | null = null;
-let legacyPg: PgClient | null = null;
 
 
 
@@ -34,7 +33,6 @@ function getLegacyPg(): PgClient | null {
     logger.debug('Fallback do banco de dados legado desabilitado via variável de ambiente.');
     return null;
   }
-  if (legacyPg) return legacyPg;
   const url = process.env.LEGACY_DATABASE_URL;
   if (!url) {
     logger.warn('LEGACY_DATABASE_URL not set. Legacy DB access disabled.');
@@ -43,12 +41,11 @@ function getLegacyPg(): PgClient | null {
   // Ajuste de SSL: somente ativa SSL quando explicitamente configurado
   const sslMode = String(process.env.LEGACY_DATABASE_SSL || '').trim().toLowerCase();
   const legacySsl = sslMode === 'no-verify' ? { rejectUnauthorized: false } : (sslMode === 'true' || sslMode === '1' ? true : undefined);
-  legacyPg = new PgClient({ connectionString: url, ssl: legacySsl as any });
-  legacyPg.connect().catch((err) => {
+  const tempLegacyPg = new PgClient({ connectionString: url, ssl: legacySsl as any });
+  tempLegacyPg.connect().catch((err) => {
     logger.error('Failed to connect to legacy database:', err);
-    legacyPg = null;
   });
-  return legacyPg;
+  return tempLegacyPg;
 }
 
 export async function initPersistence(opts: { redisUrl?: string | null; databaseUrl?: string | null; databaseSsl?: boolean | 'no-verify' }) {
@@ -70,9 +67,8 @@ export async function initPersistence(opts: { redisUrl?: string | null; database
   if (opts.databaseUrl) {
     try {
       console.log('Conectando ao PostgreSQL...');
-      const sslConfig = opts.databaseSsl === 'no-verify' ? { rejectUnauthorized: false } : (opts.databaseSsl ? true : undefined);
-      pg = new PgClient({ connectionString: opts.databaseUrl, ssl: sslConfig as any });
-      await pg.connect();
+      // Usar o pool centralizado em vez de criar novo cliente
+      await pool.query('SELECT 1');
       console.log('PostgreSQL conectado com sucesso!');
       
       console.log('Criando tabelas...');
@@ -80,7 +76,7 @@ export async function initPersistence(opts: { redisUrl?: string | null; database
       console.log('Tabelas criadas/verificadas com sucesso!');
     } catch (err) {
       console.error('Falha ao conectar PostgreSQL:', err);
-      pg = null;
+
     }
   }
 }
@@ -90,8 +86,7 @@ function nowIso() {
 }
 
 async function ensureTables() {
-  if (!pg) return;
-  await pg.query(`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS contacts (
       id SERIAL PRIMARY KEY,
       tenant_id TEXT NOT NULL,
@@ -166,29 +161,29 @@ async function ensureTables() {
   `);
   // Adicionar migração para alterar constraints se necessário
   try {
-    await pg.query('ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_phone_key');
-    await pg.query('ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_tenant_phone_key');
-    await pg.query('ALTER TABLE contacts ADD CONSTRAINT contacts_tenant_phone_key UNIQUE (tenant_id, phone)');
-    await pg.query('ALTER TABLE contacts ALTER COLUMN tenant_id SET NOT NULL');
+    await pool.query('ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_phone_key');
+  await pool.query('ALTER TABLE contacts DROP CONSTRAINT IF EXISTS contacts_tenant_phone_key');
+  await pool.query('ALTER TABLE contacts ADD CONSTRAINT contacts_tenant_phone_key UNIQUE (tenant_id, phone)');
+  await pool.query('ALTER TABLE contacts ALTER COLUMN tenant_id SET NOT NULL');
   } catch (e: any) {
     console.error('Migration failed:', e);
   }
   // Adicionar novos campos se não existirem
   try {
-    await pg.query('ALTER TABLE contacts ADD COLUMN IF NOT EXISTS primeiro_nome TEXT NULL');
-    await pg.query('ALTER TABLE contacts ADD COLUMN IF NOT EXISTS push_name TEXT NULL');
+    await pool.query('ALTER TABLE contacts ADD COLUMN IF NOT EXISTS primeiro_nome TEXT NULL');
+  await pool.query('ALTER TABLE contacts ADD COLUMN IF NOT EXISTS push_name TEXT NULL');
   } catch (e: any) {
     console.error('Migration for new contact fields failed:', e);
   }
   try {
-    await pg.query('ALTER TABLE conversation_states ALTER COLUMN tenant_id SET NOT NULL');
+    await pool.query('ALTER TABLE conversation_states ALTER COLUMN tenant_id SET NOT NULL');
   } catch (e: any) {}
   try {
-    await pg.query('ALTER TABLE appointment_requests ALTER COLUMN tenant_id SET NOT NULL');
+    await pool.query('ALTER TABLE appointment_requests ALTER COLUMN tenant_id SET NOT NULL');
   } catch (e: any) {}
   // Adicionar constraint UNIQUE para conversation_states para permitir UPSERT
   try {
-    await pg.query('ALTER TABLE conversation_states ADD CONSTRAINT conversation_states_tenant_contact_key UNIQUE (tenant_id, contact_id)');
+    await pool.query('ALTER TABLE conversation_states ADD CONSTRAINT conversation_states_tenant_contact_key UNIQUE (tenant_id, contact_id)');
   } catch (e: any) {
     // Constraint já existe ou erro na criação
   }
@@ -200,13 +195,12 @@ export async function getOrCreateContactByPhone(
   nome?: string, 
   contactInfo?: { pushName?: string; firstName?: string }
 ): Promise<{ id: number } | null> {
-  if (!pg) return null;
-  const existing = await pg.query('SELECT id FROM contacts WHERE tenant_id = $1 AND phone = $2', [tenantId, phone]);
+  const existing = await pool.query('SELECT id FROM contacts WHERE tenant_id = $1 AND phone = $2', [tenantId, phone]);
   
   if (existing.rows[0]) {
     // Atualizar informações do contato se fornecidas
     if (contactInfo?.pushName || contactInfo?.firstName) {
-      await pg.query(
+      await pool.query(
         'UPDATE contacts SET push_name = COALESCE($3, push_name), primeiro_nome = COALESCE($4, primeiro_nome), updated_at = now() WHERE tenant_id = $1 AND phone = $2',
         [tenantId, phone, contactInfo.pushName, contactInfo.firstName]
       );
@@ -214,7 +208,7 @@ export async function getOrCreateContactByPhone(
     return { id: existing.rows[0].id };
   }
   
-  const inserted = await pg.query(
+  const inserted = await pool.query(
     'INSERT INTO contacts (tenant_id, phone, nome, primeiro_nome, push_name) VALUES ($1, $2, $3, $4, $5) RETURNING id', 
     [tenantId, phone, nome || null, contactInfo?.firstName || null, contactInfo?.pushName || null]
   );
@@ -230,10 +224,10 @@ export async function setConversationState(tenantId: string, phone: string, stat
   if (redis) {
     await redis.set(key, JSON.stringify(payload), { EX: ttlSeconds });
   }
-  if (pg) {
+  {
     const contact = await getOrCreateContactByPhone(tenantId, phone);
     // Usar UPSERT para manter apenas o estado mais recente por contato
-    await pg.query(
+    await pool.query(
       `INSERT INTO conversation_states (tenant_id, contact_id, etapa_atual, state_json, updated_at, expires_at) 
        VALUES ($1, $2, $3, $4, now(), $5)
        ON CONFLICT (tenant_id, contact_id) 
@@ -255,8 +249,8 @@ export async function getConversationState(tenantId: string, phone: string): Pro
       try { return JSON.parse(raw); } catch { /* ignore */ }
     }
   }
-  if (pg) {
-    const q = await pg.query('SELECT state_json FROM conversation_states cs JOIN contacts c ON cs.contact_id = c.id WHERE cs.tenant_id = $1 AND c.phone = $2 ORDER BY cs.updated_at DESC LIMIT 1', [tenantId, phone]);
+  {
+    const q = await pool.query('SELECT state_json FROM conversation_states cs JOIN contacts c ON cs.contact_id = c.id WHERE cs.tenant_id = $1 AND c.phone = $2 ORDER BY cs.updated_at DESC LIMIT 1', [tenantId, phone]);
     if (q.rows[0]?.state_json) return q.rows[0].state_json as ConversationState;
   }
   return null;
@@ -279,13 +273,12 @@ export async function recordAppointmentAttempt(params: {
   status: 'tentado' | 'sucesso' | 'erro';
   trinksAgendamentoId?: number;
 }) {
-  if (!pg) return;
   let contactId: number | null = null;
   if (params.phone) {
     const c = await getOrCreateContactByPhone(params.tenantId, params.phone);
     contactId = c?.id || null;
   }
-  await pg.query(
+  await pool.query(
     `INSERT INTO appointment_requests (
       tenant_id, contact_id, servico_id, profissional_id, cliente_id, datahora_inicio, duracao_min, valor, confirmado, observacoes,
       trinks_payload, trinks_response, trinks_agendamento_id, status, idempotency_key
@@ -320,10 +313,9 @@ export async function recordPostBookingInteraction(params: {
   timestamp: Date;
   metadata?: any;
 }) {
-  if (!pg) return;
   
   try {
-    await pg.query(
+    await pool.query(
       `INSERT INTO post_booking_interactions (
         phone_number, booking_id, interaction_type, interaction_data, created_at
       ) VALUES ($1, $2, $3, $4, $5)`,
@@ -346,7 +338,7 @@ export async function recordPostBookingInteraction(params: {
   }
 }
 
-export function getPg() { return pg; }
+export function getPg() { return pool; }
 export function getRedis() { return redis; }
 
 // Função para limpar histórico de mensagens antigas (mais de 2 horas)
@@ -396,12 +388,9 @@ export async function getOrCreateClientSession(
   sessionData: any;
 }> {
   try {
-    if (!pg) {
-      throw new Error('Conexão com banco de dados não disponível');
-    }
 
     // Buscar sessão existente
-    const existingSession = await pg.query(
+    const existingSession = await pool.query(
       'SELECT * FROM client_sessions WHERE tenant_id = $1 AND phone = $2',
       [tenantId, phone]
     );
@@ -411,7 +400,7 @@ export async function getOrCreateClientSession(
       
       // Atualizar informações de contato se fornecidas
       if (contactInfo?.pushName || contactInfo?.firstName) {
-        await pg.query(
+        await pool.query(
           'UPDATE client_sessions SET push_name = COALESCE($3, push_name), first_name = COALESCE($4, first_name), last_activity = now() WHERE tenant_id = $1 AND phone = $2',
           [tenantId, phone, contactInfo?.pushName, contactInfo?.firstName]
         );
@@ -429,7 +418,7 @@ export async function getOrCreateClientSession(
     }
 
     // Criar nova sessão
-    const newSession = await pg.query(
+    const newSession = await pool.query(
       `INSERT INTO client_sessions (tenant_id, phone, push_name, first_name, session_data, last_activity)
        VALUES ($1, $2, $3, $4, $5, now())
        RETURNING *`,
@@ -488,12 +477,10 @@ export async function updateClientSession(
 
     if (setClause.length > 0) {
       setClause.push('last_activity = now()');
-      if (pg) {
-        await pg.query(
-          `UPDATE client_sessions SET ${setClause.join(', ')} WHERE tenant_id = $1 AND phone = $2`,
-          values
-        );
-      }
+      await pool.query(
+        `UPDATE client_sessions SET ${setClause.join(', ')} WHERE tenant_id = $1 AND phone = $2`,
+        values
+      );
     }
   } catch (error) {
     console.error('Erro ao atualizar sessão do cliente:', error);
@@ -541,15 +528,11 @@ export async function searchAndUpdateTrinksClient(
 }
 
 // Helpers para testes
-export function __setPgForTests(client: any) { pg = client as PgClient; }
-export function __resetPgForTests() { pg = null; }
+export function __setPgForTests(client: any) { /* No longer needed */ }
+export function __resetPgForTests() { /* No longer needed */ }
 
 export async function getAllConversationStates(tenantId: string): Promise<any[]> {
-  const dbPg = getPg();
-  if (!dbPg) {
-    throw new Error('Database not initialized');
-  }
-  const result = await dbPg.query(
+  const result = await pool.query(
     'SELECT phone, state FROM conversation_states WHERE tenant_id = $1',
     [tenantId]
   );
@@ -558,9 +541,8 @@ export async function getAllConversationStates(tenantId: string): Promise<any[]>
 
 // Função para limpar estados de conversa expirados
 export async function cleanExpiredConversationStates(): Promise<void> {
-  if (!pg) return;
   try {
-    const result = await pg.query(
+    const result = await pool.query(
       'DELETE FROM conversation_states WHERE expires_at < now()'
     );
     if (result.rowCount && result.rowCount > 0) {
@@ -575,7 +557,7 @@ export async function upsertServicosProf(
   tenantId: string,
   items: Array<{ servicoId: number; servicoNome: string; duracaoMin: number; valor?: number | null; profissionalId?: number | null; visivelCliente?: boolean | null; ativo?: boolean | null }>
 ): Promise<void> {
-  if (!pg || !items || items.length === 0) return;
+  if (!items || items.length === 0) return;
   
   // Normalizar e deduplicar itens antes da inserção
   const normalizedItems = new Map<string, typeof items[0]>();
@@ -595,7 +577,7 @@ export async function upsertServicosProf(
   
   // Inserir itens normalizados
   for (const it of normalizedItems.values()) {
-    await pg.query(
+    await pool.query(
       `INSERT INTO servicos_prof (tenant_id, servico_id, servico_nome, duracao_min, valor, profissional_id, visivel_cliente, ativo, last_synced_at)
        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7, TRUE), COALESCE($8, TRUE), now())
        ON CONFLICT (tenant_id, servico_id, profissional_id)
@@ -627,10 +609,10 @@ export async function getServicosSuggestions(
     } catch {}
   }
 
-  if (!pg) return [];
+
   const like = `%${term.toLowerCase()}%`;
   const max = Math.max(1, Math.min(10, limit));
-  const q = await pg.query(
+  const q = await pool.query(
     `SELECT servico_id as "servicoId",
             MIN(servico_nome) as "servicoNome",
             MIN(duracao_min) as "duracaoMin",
@@ -687,15 +669,14 @@ export async function existsServicoInCatalog(
   servicoId: number,
   profissionalId?: number | null
 ): Promise<boolean> {
-  if (!pg) return false;
   if (profissionalId == null) {
-    const r = await pg.query(
+    const r = await pool.query(
       'SELECT 1 FROM servicos_prof WHERE tenant_id = $1 AND servico_id = $2 AND ativo IS TRUE AND visivel_cliente IS TRUE LIMIT 1',
       [tenantId, servicoId]
     );
     return r.rows.length > 0;
   }
-  const r = await pg.query(
+  const r = await pool.query(
     'SELECT 1 FROM servicos_prof WHERE tenant_id = $1 AND servico_id = $2 AND profissional_id = $3 AND ativo IS TRUE AND visivel_cliente IS TRUE LIMIT 1',
     [tenantId, servicoId, profissionalId]
   );
@@ -776,5 +757,5 @@ export async function releaseIdempotencyKey(key: string): Promise<void> {
 }
 
 // Export pg client for direct database access
-export { pg, redis };
-export const db = pg;
+export { pool as pg, redis };
+export const db = pool;
