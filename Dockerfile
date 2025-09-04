@@ -13,11 +13,11 @@ RUN npm ci
 # Copy source code
 COPY . .
 
-# Build the application
-RUN npm run build
+# Skip build step - use ts-node in production
+# RUN npm run build
 
-# Remove devDependencies after build
-RUN npm prune --production
+# Keep devDependencies for ts-node
+# RUN npm prune --production
 
 # Expose port (default)
 EXPOSE 3000
