@@ -314,7 +314,8 @@ export async function recommendSlots(
           data: dateISO,
           servicoId: params.serviceId || '1',
           servicoDuracao: '60',
-          profissionalId: professionalId
+          profissionalId: professionalId,
+          tenantId: params.tenantId
         });
         
         // Assumir que agenda retorna slots ocupados, então os não listados estão disponíveis

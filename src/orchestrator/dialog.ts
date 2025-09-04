@@ -151,7 +151,7 @@ async function resolveServiceInfoByName(nameLike: string): Promise<{ id: number;
     }
 
     // Buscar apenas serviços visíveis ao cliente para evitar categorias/itens ocultos
-    const services = await trinks.Trinks.buscarServicos({ nome: nameLike, somenteVisiveisCliente: true });
+    const services = await trinks.Trinks.buscarServicos({ nome: nameLike, somenteVisiveisCliente: true, tenantId: 'default' });
     const list = services?.data || services || [];
     const arr = Array.isArray(list) ? list : [];
     if (arr.length === 0) return null;
@@ -605,7 +605,8 @@ switch (currentSchedulingState) {
               info.id,
               info.duracaoEmMinutos,
               dateISO,
-              relativeDateInfo.period
+              relativeDateInfo.period,
+              'default'
             );
             
             if (proactiveSlots.suggestions.length > 0) {
@@ -725,7 +726,8 @@ const disponibilidade = await trinks.Trinks.verificarHorarioDisponivel({
         data: date,
         hora: time,
         servicoId: info.id,
-        duracaoEmMinutos: info.duracaoEmMinutos
+        duracaoEmMinutos: info.duracaoEmMinutos,
+        tenantId: 'default'
       });
 
       if (disponibilidade.disponivel) {
@@ -791,6 +793,7 @@ Se precisar alterar, me avise.`;
         duracaoEmMinutos: info.duracaoEmMinutos,
         valor: info.valor || 0,
         confirmado: true,
+        tenantId: 'default'
       });
 
       // Persistir resultado idempotente (se houver ID)

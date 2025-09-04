@@ -570,25 +570,79 @@ export async function upsertServicosProf(
     // Manter apenas o último item para cada chave de dedupe
     normalizedItems.set(dedupeKey, {
       ...it,
-      servicoNome: normalizedNome,
+      servicoNome: it.servicoNome.trim(), // Manter original para inserção
       profissionalId
     });
   }
   
-  // Inserir itens normalizados
+  // Inserir itens normalizados com tratamento de conflitos
   for (const it of normalizedItems.values()) {
-    await pool.query(
-      `INSERT INTO servicos_prof (tenant_id, servico_id, servico_nome, duracao_min, valor, profissional_id, visivel_cliente, ativo, last_synced_at)
-       VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7, TRUE), COALESCE($8, TRUE), now())
-       ON CONFLICT (tenant_id, servico_id, profissional_id)
-       DO UPDATE SET servico_nome = EXCLUDED.servico_nome,
-                     duracao_min = EXCLUDED.duracao_min,
-                     valor = EXCLUDED.valor,
-                     visivel_cliente = EXCLUDED.visivel_cliente,
-                     ativo = EXCLUDED.ativo,
-                     last_synced_at = now()`,
-      [tenantId, it.servicoId, it.servicoNome, it.duracaoMin, it.valor ?? null, it.profissionalId, it.visivelCliente ?? true, it.ativo ?? true]
-    );
+    try {
+      // Tentar inserir primeiro
+      await pool.query(
+        `INSERT INTO servicos_prof (tenant_id, servico_id, servico_nome, duracao_min, valor, profissional_id, visivel_cliente, ativo, last_synced_at)
+         VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7, TRUE), COALESCE($8, TRUE), now())
+         ON CONFLICT (tenant_id, servico_id, profissional_id)
+         DO UPDATE SET servico_nome = EXCLUDED.servico_nome,
+                       duracao_min = EXCLUDED.duracao_min,
+                       valor = EXCLUDED.valor,
+                       visivel_cliente = EXCLUDED.visivel_cliente,
+                       ativo = EXCLUDED.ativo,
+                       last_synced_at = now()`,
+        [tenantId, it.servicoId, it.servicoNome, it.duracaoMin, it.valor ?? null, it.profissionalId, it.visivelCliente ?? true, it.ativo ?? true]
+      );
+    } catch (error: any) {
+      // Se houver conflito na constraint única de servico_nome_norm, fazer merge
+      if (error.code === '23505' && error.constraint === 'uniq_servico_nome_norm') {
+        logger.warn(`Conflito de nome normalizado detectado para tenant ${tenantId}`, {
+          servicoNome: it.servicoNome,
+          servicoId: it.servicoId,
+          profissionalId: it.profissionalId
+        });
+        
+        // Buscar registro existente para merge
+        const existingResult = await pool.query(
+          `SELECT * FROM servicos_prof 
+           WHERE tenant_id = $1 AND servico_nome_norm = lower(btrim($2)) 
+           LIMIT 1`,
+          [tenantId, it.servicoNome]
+        );
+        
+        if (existingResult.rows.length > 0) {
+          const existing = existingResult.rows[0];
+          
+          // Fazer merge dos dados (priorizar dados mais recentes)
+          const mergedData = {
+            servicoId: it.servicoId, // Manter o novo ID
+            servicoNome: it.servicoNome, // Manter o novo nome
+            duracaoMin: it.duracaoMin,
+            valor: it.valor ?? existing.valor, // Usar novo valor ou manter existente
+            profissionalId: it.profissionalId,
+            visivelCliente: it.visivelCliente ?? existing.visivel_cliente,
+            ativo: it.ativo ?? existing.ativo
+          };
+          
+          // Atualizar registro existente
+          await pool.query(
+            `UPDATE servicos_prof 
+             SET servico_id = $2, servico_nome = $3, duracao_min = $4, valor = $5, 
+                 profissional_id = $6, visivel_cliente = $7, ativo = $8, last_synced_at = now()
+             WHERE id = $1`,
+            [existing.id, mergedData.servicoId, mergedData.servicoNome, mergedData.duracaoMin, 
+             mergedData.valor, mergedData.profissionalId, mergedData.visivelCliente, mergedData.ativo]
+          );
+          
+          logger.info(`Merge realizado com sucesso para serviço duplicado`, {
+            tenantId,
+            existingId: existing.id,
+            mergedData
+          });
+        }
+      } else {
+        // Re-throw outros erros
+        throw error;
+      }
+    }
   }
 }
 
@@ -610,7 +664,8 @@ export async function getServicosSuggestions(
   }
 
 
-  const like = `%${term.toLowerCase()}%`;
+  const normalizedTerm = term.toLowerCase().trim();
+  const like = `${normalizedTerm}%`;
   const max = Math.max(1, Math.min(10, limit));
   const q = await pool.query(
     `SELECT servico_id as "servicoId",
@@ -621,9 +676,9 @@ export async function getServicosSuggestions(
       WHERE tenant_id = $1
         AND ativo IS TRUE
         AND visivel_cliente IS TRUE
-        AND lower(servico_nome) LIKE $2
+        AND servico_nome_norm LIKE $2
       GROUP BY servico_id
-      ORDER BY MIN(valor) NULLS LAST, MIN(servico_nome)
+      ORDER BY MIN(valor) NULLS LAST, MIN(servico_nome_norm)
       LIMIT $3`,
     [tenantId, like, max]
   );

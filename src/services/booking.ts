@@ -63,7 +63,8 @@ export async function createBookingWithCTAs(
       confirmado: true,
       observacoes: bookingData.clientName,
       profissionalId: bookingData.professionalId ? parseInt(bookingData.professionalId) : undefined,
-      telefone: bookingData.phone
+      telefone: bookingData.phone,
+      tenantId: bookingData.tenantId
     });
     
     if (!trinksResult.success) {

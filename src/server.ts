@@ -10,6 +10,9 @@ import logger from './utils/logger';
 import { adminAuth, adminRateLimit, auditLogger, webhookAuth, webhookRateLimit, webhookDedupe } from './middleware/security';
 import { metricsMiddleware, metricsHandler, incrementConversationsStarted, incrementServiceSuggestions, incrementBookingsConfirmed, incrementTrinksErrors } from './middleware/metrics';
 import { healthHandler, readyHandler } from './middleware/health';
+import { tenantMiddleware } from './middleware/tenant';
+import { createPIIMaskingMiddleware, PRODUCTION_PII_CONFIG } from './middleware/piiMasking';
+import adminRoutes from './routes/admin';
 import { getRedis } from './infra/redis';
 import { pool } from './infra/db';
 
@@ -47,6 +50,14 @@ app.use((req, _res, next) => {
   console.log(`[IN] ${req.method} ${req.url}`);
   next();
 });
+
+// Middleware de tenant (deve vir após middlewares básicos mas antes das rotas)
+app.use(tenantMiddleware);
+
+// Middleware de mascaramento de PII em logs
+if (process.env.MASK_PII !== 'false') {
+  app.use(createPIIMaskingMiddleware(PRODUCTION_PII_CONFIG));
+}
 
 // Env validation (relaxed to allow server startup without third-party creds)
 const EnvSchema = z.object({
@@ -103,6 +114,9 @@ app.get('/ready', readyHandler);
 
 // Metrics endpoint
 app.get('/metrics', metricsHandler);
+
+// Rotas administrativas
+app.use('/admin', adminRoutes);
 
 // Ping simples para diagnosticar
 app.get('/__ping', (_req, res) => res.json({ ok: true, at: 'root' }));
@@ -396,7 +410,7 @@ app.post('/admin/sync-servicos', adminRateLimit, adminAuth, async (req, res) => 
     const { upsertServicosProf } = await import('./db/index');
     
     // Buscar todos os serviços do Trinks
-    const servicos = await Trinks.buscarServicos({ somenteVisiveisCliente: true });
+    const servicos = await Trinks.buscarServicos({ somenteVisiveisCliente: true, tenantId: 'default' });
     
     if (!servicos || !Array.isArray(servicos)) {
       return res.status(400).json({ error: 'Nenhum serviço encontrado no Trinks' });

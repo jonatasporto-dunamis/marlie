@@ -40,25 +40,28 @@ export function generateIdempotencyKey(
 }
 
 /**
- * Generate booking idempotency key
+ * Generate booking idempotency key according to requirements:
+ * Key: idem:{tenant_id}:{sha256(phone|servicoId|date|time)}
+ * TTL: 30 minutes
  */
 export function generateBookingIdempotencyKey(
   telefone: string,
   servicoId: number,
   dateISO: string,
-  timeISO: string
+  timeISO: string,
+  tenantId: string = 'default'
 ): string {
-  const params = {
-    telefone: telefone.replace(/\D/g, ''), // Remove non-digits
-    servicoId,
-    dateISO,
-    timeISO
-  };
+  // Clean phone number (remove non-digits)
+  const cleanPhone = telefone.replace(/\D/g, '');
   
-  return generateIdempotencyKey('booking', params, {
-    keyPrefix: 'idemp:booking',
-    ttl: 30 * 60 // 30 minutes
-  });
+  // Create the data string for hashing: phone|servicoId|date|time
+  const dataToHash = `${cleanPhone}|${servicoId}|${dateISO}|${timeISO}`;
+  
+  // Generate SHA256 hash
+  const hash = crypto.createHash('sha256').update(dataToHash).digest('hex');
+  
+  // Return key in required format: idem:{tenant_id}:{sha256}
+  return `idem:${tenantId}:${hash}`;
 }
 
 /**

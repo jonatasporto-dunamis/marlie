@@ -89,7 +89,8 @@ export async function suggestProactiveTimeSlots(
   servicoId: number,
   duracaoEmMinutos: number,
   dateISO: string,
-  period?: Period
+  period?: Period,
+  tenantId: string = 'default'
 ): Promise<{
   suggestions: string[];
   fallbackDate?: string;

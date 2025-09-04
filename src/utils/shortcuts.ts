@@ -358,7 +358,7 @@ async function findServicePrice(serviceName: string): Promise<{ name: string; pr
     }
     
     // Buscar no Trinks se não encontrar localmente
-    const services = await trinks.Trinks.buscarServicos({ nome: serviceName });
+    const services = await trinks.Trinks.buscarServicos({ nome: serviceName, tenantId: 'default' });
     const servicesList = Array.isArray(services?.data) ? services.data : services || [];
     
     if (servicesList.length > 0) {
