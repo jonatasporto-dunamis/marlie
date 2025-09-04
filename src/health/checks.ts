@@ -148,7 +148,7 @@ export async function checkEvolution(): Promise<HealthCheckResult> {
   const startTime = Date.now();
   
   try {
-    const evolutionBaseUrl = process.env.EVOLUTION_API_URL;
+    const evolutionBaseUrl = process.env.EVOLUTION_BASE_URL;
     const evolutionApiKey = process.env.EVOLUTION_API_KEY;
     
     if (!evolutionBaseUrl) {
@@ -156,7 +156,7 @@ export async function checkEvolution(): Promise<HealthCheckResult> {
         status: 'unhealthy',
         timestamp: new Date().toISOString(),
         duration_ms: 0,
-        error: 'EVOLUTION_API_URL not configured'
+        error: 'EVOLUTION_BASE_URL not configured'
       };
     }
     
