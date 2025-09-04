@@ -3,7 +3,7 @@ import express from 'express';
 import { z } from 'zod';
 import axios from 'axios';
 import * as trinks from './integrations/trinks';
-import { initPersistence, setConversationState, getConversationState, recordAppointmentAttempt, cleanExpiredConversationStates } from './db/index';
+import { setConversationState, getConversationState, recordAppointmentAttempt, cleanExpiredConversationStates } from './db/index';
 import jwt from 'jsonwebtoken';
 import { getAllConversationStates } from './db/index';
 import logger from './utils/logger';
@@ -528,10 +528,6 @@ app.post('/trinks/agendamentos', async (req, res) => {
 
 // Inicialização da persistência e servidor
 if (process.env.NODE_ENV !== 'test') {
-  const sslMode = String(env.DATABASE_SSL || '').trim().toLowerCase();
-  const databaseSsl: boolean | 'no-verify' | undefined =
-    sslMode === 'no-verify' ? 'no-verify' : (sslMode === 'true' || sslMode === '1' ? true : undefined);
-
   // Inicializar Redis e DB no boot
   async function initializeServices() {
     try {
@@ -543,14 +539,8 @@ if (process.env.NODE_ENV !== 'test') {
     }
   }
 
-  initPersistence({
-    redisUrl: env.REDIS_URL || null,
-    databaseUrl: env.DATABASE_URL || null,
-    databaseSsl,
-  }).then(async () => {
-    // Inicializar serviços
-    await initializeServices();
-    
+  // Inicializar serviços
+  initializeServices().then(() => {
     // Configurar limpeza automática de estados expirados a cada hora
     setInterval(async () => {
       try {
@@ -560,9 +550,9 @@ if (process.env.NODE_ENV !== 'test') {
       }
     }, 60 * 60 * 1000); // 1 hora
     
-    logger.info('Sistema de persistência inicializado com limpeza automática');
+    logger.info('Serviços inicializados com limpeza automática');
   }).catch((e) => {
-    console.error('Persistência não inicializada:', e?.message || e);
+    console.error('Erro ao inicializar serviços:', e?.message || e);
   });
 
   const port = Number(env.PORT || 3000);
