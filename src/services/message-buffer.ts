@@ -51,7 +51,7 @@ export class MessageBuffer {
       
       if (existingBuffer) {
         try {
-          bufferedMessages = JSON.parse(existingBuffer);
+          bufferedMessages = JSON.parse(existingBuffer as string);
           
           // Remove messages outside the window
           const windowStart = now - (this.config.windowSeconds * 1000);
@@ -110,7 +110,7 @@ export class MessageBuffer {
         return null;
       }
 
-      const bufferedMessages: BufferedMessage[] = JSON.parse(existingBuffer);
+      const bufferedMessages: BufferedMessage[] = JSON.parse(existingBuffer as string);
       await this.redis.del(bufferKey);
       
       return this.consolidateMessages(bufferedMessages);
@@ -176,7 +176,7 @@ export class MessageBuffer {
         if (!buffer) continue;
         
         try {
-          const messages: BufferedMessage[] = JSON.parse(buffer);
+          const messages: BufferedMessage[] = JSON.parse(buffer as string);
           const validMessages = messages.filter(msg => msg.timestamp >= windowStart);
           
           if (validMessages.length === 0) {
@@ -225,7 +225,7 @@ export class MessageBuffer {
         };
       }
 
-      const messages: BufferedMessage[] = JSON.parse(buffer);
+      const messages: BufferedMessage[] = JSON.parse(buffer as string);
       
       if (messages.length === 0) {
         return {

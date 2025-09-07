@@ -1,0 +1,347 @@
+# Pipeline CI/CD Configuration
+# Configuração dos estágios e comandos do pipeline conforme especificação
+
+name: "marlie-quality-pipeline"
+version: "1.0.0"
+description: "Pipeline CI/CD para testes de qualidade, deploy e rollback automático"
+
+# Configurações globais
+global:
+  timeout_minutes: 30
+  parallel_execution: false
+  auto_rollback_on_fail: true
+  notification_channels: ["slack", "webhook"]
+  
+# Variáveis de ambiente necessárias
+environment_variables:
+  required:
+    - HOST
+    - ADMIN_TOKEN
+    - IMAGE_TAG
+    - HEALTH_URL
+  optional:
+    - WEBHOOK_URL
+    - SLACK_WEBHOOK
+    - GITHUB_TOKEN
+
+# Definição dos estágios do pipeline
+stages:
+  # 1. Lint e análise estática
+  - name: "lint"
+    description: "Análise estática de código e Dockerfile"
+    timeout_minutes: 5
+    parallel: false
+    commands:
+      - name: "lint_code"
+        command: "pnpm lint || npm run lint"
+        description: "Executar linting do código TypeScript/JavaScript"
+        retry_attempts: 1
+        
+      - name: "lint_dockerfile"
+        command: "docker run --rm hadolint/hadolint < Dockerfile || true"
+        description: "Análise do Dockerfile com Hadolint"
+        allow_failure: true
+        
+    success_criteria:
+      - "exit_code == 0 for lint_code"
+    
+    on_failure:
+      action: "stop_pipeline"
+      message: "Falha na análise estática - corrija os problemas de linting"
+
+  # 2. Testes unitários e de contrato
+  - name: "unit_and_contract_tests"
+    description: "Execução de testes unitários e de contrato"
+    timeout_minutes: 10
+    parallel: true
+    commands:
+      - name: "unit_tests"
+        command: "pnpm test:unit"
+        description: "Executar testes unitários"
+        retry_attempts: 2
+        
+      - name: "contract_tests"
+        command: "curl -X POST $HOST/admin/qa/run -H 'Authorization: Bearer $ADMIN_TOKEN' -d '{\"suite\":\"trinks_fetch_contract\"}'"
+        description: "Executar testes de contrato via API"
+        retry_attempts: 1
+        expected_response:
+          status_code: 200
+          body_contains: '"status":"pass"'
+        
+    success_criteria:
+      - "exit_code == 0 for unit_tests"
+      - "http_status == 200 for contract_tests"
+      - "response_contains 'pass' for contract_tests"
+    
+    on_failure:
+      action: "continue"
+      message: "Falha nos testes unitários ou de contrato"
+
+  # 3. Testes E2E
+  - name: "e2e_tests"
+    description: "Execução de testes end-to-end"
+    timeout_minutes: 15
+    parallel: false
+    depends_on: ["unit_and_contract_tests"]
+    commands:
+      - name: "e2e_booking_flow"
+        command: "curl -X POST $HOST/admin/qa/run -H 'Authorization: Bearer $ADMIN_TOKEN' -d '{\"suite\":\"booking_flow_ok\"}'"
+        description: "Executar teste E2E do fluxo de agendamento"
+        retry_attempts: 2
+        expected_response:
+          status_code: 200
+          body_contains: '"status":"pass"'
+        
+    success_criteria:
+      - "http_status == 200 for e2e_booking_flow"
+      - "response_contains 'pass' for e2e_booking_flow"
+    
+    on_failure:
+      action: "continue"
+      message: "Falha nos testes E2E"
+
+  # 4. Análise de segurança
+  - name: "security_scan"
+    description: "Análise de segurança e vulnerabilidades"
+    timeout_minutes: 10
+    parallel: false
+    commands:
+      - name: "build_image"
+        command: "docker build -t $IMAGE_TAG ."
+        description: "Build da imagem Docker para análise"
+        retry_attempts: 1
+        
+      - name: "vulnerability_scan"
+        command: "docker run --rm aquasec/trivy:latest image --exit-code 1 $IMAGE_TAG || true"
+        description: "Scan de vulnerabilidades com Trivy"
+        allow_failure: true
+        
+    success_criteria:
+      - "exit_code == 0 for build_image"
+    
+    on_failure:
+      action: "continue"
+      message: "Falha na análise de segurança"
+
+  # 5. Push e deploy
+  - name: "push_and_deploy"
+    description: "Push da imagem e deploy da aplicação"
+    timeout_minutes: 10
+    parallel: false
+    depends_on: ["security_scan"]
+    commands:
+      - name: "push_image"
+        command: "docker push $IMAGE_TAG"
+        description: "Push da imagem para registry"
+        retry_attempts: 2
+        
+      - name: "deploy_application"
+        command: "kubectl set image deploy/marlie api=$IMAGE_TAG"
+        description: "Deploy da nova versão"
+        retry_attempts: 1
+        
+    success_criteria:
+      - "exit_code == 0 for push_image"
+      - "exit_code == 0 for deploy_application"
+    
+    on_failure:
+      action: "rollback"
+      message: "Falha no deploy - iniciando rollback"
+
+  # 6. Health check pós-deploy
+  - name: "post_deploy_healthcheck"
+    description: "Verificação de saúde após deploy"
+    timeout_minutes: 5
+    parallel: false
+    depends_on: ["push_and_deploy"]
+    commands:
+      - name: "health_check"
+        command: "./scripts/healthcheck.sh $HEALTH_URL 120"
+        description: "Executar health check da aplicação"
+        retry_attempts: 3
+        
+    success_criteria:
+      - "exit_code == 0 for health_check"
+    
+    on_failure:
+      action: "rollback"
+      message: "Health check falhou - iniciando rollback automático"
+
+  # 7. Rollback automático em caso de falha
+  - name: "auto_rollback_on_fail"
+    description: "Rollback automático em caso de falha no health check"
+    timeout_minutes: 5
+    parallel: false
+    trigger: "on_failure"
+    commands:
+      - name: "rollback_deployment"
+        command: "if [ $? -ne 0 ]; then kubectl rollout undo deploy/marlie; exit 1; fi"
+        description: "Executar rollback do deployment"
+        retry_attempts: 1
+        
+      - name: "verify_rollback"
+        command: "kubectl rollout status deploy/marlie --timeout=120s"
+        description: "Verificar status do rollback"
+        retry_attempts: 1
+        
+    success_criteria:
+      - "exit_code == 0 for rollback_deployment"
+      - "exit_code == 0 for verify_rollback"
+    
+    on_failure:
+      action: "alert"
+      message: "CRÍTICO: Rollback automático falhou - intervenção manual necessária"
+
+# Configurações de notificação
+notifications:
+  slack:
+    enabled: true
+    webhook_url: "${SLACK_WEBHOOK}"
+    channel: "#deployments"
+    events:
+      - "pipeline_started"
+      - "pipeline_completed"
+      - "pipeline_failed"
+      - "rollback_executed"
+    
+  webhook:
+    enabled: true
+    url: "${WEBHOOK_URL}"
+    events:
+      - "stage_failed"
+      - "pipeline_completed"
+      - "rollback_executed"
+    
+  email:
+    enabled: false
+    recipients: ["dev-team@marlie.com.br"]
+    events:
+      - "pipeline_failed"
+      - "rollback_executed"
+
+# Configurações de rollback
+rollback:
+  auto_trigger: true
+  conditions:
+    - "health_check_failed"
+    - "deploy_failed"
+  
+  strategy: "previous_version"
+  timeout_minutes: 5
+  
+  verification:
+    enabled: true
+    health_check_url: "${HEALTH_URL}"
+    timeout_seconds: 120
+    
+  notifications:
+    - "slack"
+    - "webhook"
+
+# Métricas e monitoramento
+metrics:
+  enabled: true
+  
+  collectors:
+    - name: "pipeline_duration"
+      type: "histogram"
+      description: "Duração total do pipeline"
+      
+    - name: "stage_duration"
+      type: "histogram"
+      description: "Duração por estágio"
+      labels: ["stage_name", "status"]
+      
+    - name: "test_results"
+      type: "counter"
+      description: "Resultados dos testes"
+      labels: ["test_type", "status"]
+      
+    - name: "deployment_frequency"
+      type: "counter"
+      description: "Frequência de deployments"
+      labels: ["environment", "status"]
+      
+    - name: "rollback_frequency"
+      type: "counter"
+      description: "Frequência de rollbacks"
+      labels: ["reason", "success"]
+
+# Configurações por ambiente
+environments:
+  development:
+    auto_deploy: true
+    require_approval: false
+    skip_security_scan: true
+    parallel_tests: true
+    
+  staging:
+    auto_deploy: true
+    require_approval: false
+    skip_security_scan: false
+    parallel_tests: true
+    
+  production:
+    auto_deploy: false
+    require_approval: true
+    skip_security_scan: false
+    parallel_tests: false
+    additional_checks:
+      - "manual_approval"
+      - "change_window_validation"
+
+# Runbooks e comandos úteis
+runbooks:
+  seed_staging:
+    description: "Seedar dados no ambiente de staging"
+    commands:
+      - "POST /admin/seed {rows:3}"
+      - "Para reset: POST /admin/seed/reset"
+    
+  run_e2e:
+    description: "Executar testes E2E manualmente"
+    commands:
+      - "POST /admin/qa/run {suite:'booking_flow_ok'}"
+    
+  manual_rollback:
+    description: "Executar rollback manual"
+    commands:
+      - "kubectl rollout undo deploy/marlie"
+      - "kubectl rollout status deploy/marlie"
+    
+  debug_pipeline:
+    description: "Debug de problemas no pipeline"
+    commands:
+      - "kubectl logs deploy/marlie"
+      - "kubectl describe deploy/marlie"
+      - "curl -H 'Authorization: Bearer $ADMIN_TOKEN' $HOST/health"
+
+# Critérios de aceitação
+acceptance_criteria:
+  e2e_coverage:
+    description: "E2E cobre WhatsApp→diálogo→confirmação→Trinks com stubs habilitáveis"
+    validation:
+      - "booking_flow_ok suite exists"
+      - "stub configuration available"
+      - "trinks integration tested"
+    
+  contract_validation:
+    description: "Contrato valida shapes de Trinks e Evolution"
+    validation:
+      - "trinks_fetch_contract suite exists"
+      - "evolution api contract defined"
+      - "schema validation implemented"
+    
+  seeds_available:
+    description: "Seeds disponíveis para staging (criar e resetar)"
+    validation:
+      - "seed endpoints available"
+      - "reset functionality implemented"
+      - "staging environment configured"
+    
+  pipeline_complete:
+    description: "Pipeline: lint, testes (unit/contrato/E2E), scan, deploy, healthcheck e rollback automático"
+    validation:
+      - "all stages defined"
+      - "auto rollback configured"
+      - "health check implemented"

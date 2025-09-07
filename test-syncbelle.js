@@ -1,5 +1,5 @@
-// Script simples para testar o Agente Marlie
-console.log('🤖 Iniciando teste do Agente Marlie...');
+// Script simples para testar o Agente Syncbelle
+console.log('🤖 Iniciando teste do Agente Syncbelle...');
 
 // Simulação simples sem dependências externas
 
@@ -104,8 +104,8 @@ class MockTrinksService {
   }
 }
 
-async function testMarlie() {
-  console.log('🤖 Testando lógica do Agente Marlie...');
+async function testSyncbelle() {
+  console.log('🤖 Testando lógica do Agente Syncbelle...');
   
   try {
     // Teste 1: Simulação de menu inicial
@@ -134,7 +134,7 @@ async function testMarlie() {
 // Funções de simulação
 function simulateMenuResponse(message, user) {
   const firstName = user?.first_name || 'Cliente';
-  return `Olá ${firstName}! 👋\n\nSou a Marlie, sua assistente virtual. Como posso ajudar você hoje?\n\n*1* - 📅 Agendar serviço\n*2* - ℹ️ Informações sobre nossos serviços\n\nDigite o número da opção desejada.`;
+  return `Olá ${firstName}! 👋\n\nSou a Syncbelle, sua assistente virtual. Como posso ajudar você hoje?\n\n*1* - 📅 Agendar serviço\n*2* - ℹ️ Informações sobre nossos serviços\n\nDigite o número da opção desejada.`;
 }
 
 function simulateOptionResponse(option) {
@@ -160,4 +160,4 @@ function simulateServiceResponse(service) {
 }
 
 // Executa o teste
-testMarlie();
+testSyncbelle();

@@ -4,7 +4,8 @@ const path = require('path');
 require('dotenv').config();
 
 async function runMigration() {
-  const migrationFile = path.join(__dirname, '..', 'migrations', '001_create_indexes.sql');
+  const migrationName = process.argv[2] || '001_create_indexes.sql';
+  const migrationFile = path.join(__dirname, '..', 'migrations', migrationName);
   
   if (!fs.existsSync(migrationFile)) {
     console.error('Migration file not found:', migrationFile);
@@ -27,7 +28,7 @@ async function runMigration() {
     console.log('Connecting to database...');
     const client = await pool.connect();
     
-    console.log('Running migration: 001_create_indexes.sql');
+    console.log(`Running migration: ${migrationName}`);
     await client.query(sql);
     
     console.log('Migration completed successfully!');
@@ -35,6 +36,7 @@ async function runMigration() {
     client.release();
   } catch (error) {
     console.error('Migration failed:', error.message);
+    console.error('Error details:', error);
     process.exit(1);
   } finally {
     await pool.end();

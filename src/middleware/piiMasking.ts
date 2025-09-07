@@ -12,7 +12,7 @@ export interface PIIMaskingConfig {
   maskCreditCard?: boolean;
   customPatterns?: Array<{
     pattern: RegExp;
-    replacement: string;
+    replacement: string | ((match: string) => string);
     description: string;
   }>;
 }
@@ -172,7 +172,11 @@ export function maskPII(text: string, config: PIIMaskingConfig = DEFAULT_CONFIG)
   // Aplicar padrões customizados
   if (config.customPatterns) {
     for (const customPattern of config.customPatterns) {
-      maskedText = maskedText.replace(customPattern.pattern, customPattern.replacement);
+      if (typeof customPattern.replacement === 'string') {
+        maskedText = maskedText.replace(customPattern.pattern, customPattern.replacement);
+      } else {
+        maskedText = maskedText.replace(customPattern.pattern, customPattern.replacement);
+      }
     }
   }
   
@@ -351,7 +355,7 @@ export const PRODUCTION_PII_CONFIG: PIIMaskingConfig = {
     },
     {
       pattern: /\b\d{13,19}\b/g, // Números longos (possíveis cartões)
-      replacement: (match: string) => `${match.substring(0, 4)}${'*'.repeat(match.length - 8)}${match.substring(match.length - 4)}`,
+      replacement: '[LONG_NUMBER]',
       description: 'Long number sequence'
     }
   ]

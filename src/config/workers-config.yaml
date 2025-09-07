@@ -1,0 +1,130 @@
+# ---------------------- WORKERS & SCHEDULES ------------------------------------
+workers:
+  previsit_daily:
+    enabled: "{{env.PREVISIT_ENABLED}}"
+    cron: "0 {{env.PREVISIT_HOUR}} * * *"   # dispara diariamente às 18:00 locais
+    timezone: "{{env.TIMEZONE}}"
+    steps:
+      - set:
+          date_target: "{{tomorrow_local_date(env.timezone)}}"
+          start_iso: "{{date_target}}T00:01:00"
+          end_iso: "{{date_target}}T23:59:00"
+      - paginate:
+          tool: "trinks.fetch_appointments"
+          args: { dataInicio: "{{start_iso}}", dataFim: "{{end_iso}}" }
+          retry: "{{retry_policy.network}}"
+          on_page:
+            - for_each: "{{page.items}}"
+              do:
+                - set:
+                    apt: "{{item}}"
+                    dedupe_key: "previsit:{{apt.id}}:{{date_target}}"
+                - tool: "db.has_notification"
+                  args: { dedupe_key: "{{dedupe_key}}" }
+                  save_as: "already"
+                - if: "{{already.exists}}"
+                  then: { continue: true }
+                - tool: "trinks.get_appointment"
+                  args: { id: "{{apt.id}}" }
+                  retry: "{{retry_policy.network}}"
+                  save_as: "apt_full"
+                - if: "{{apt_full.status.nome != 'Confirmado'}}"
+                  then: { continue: true }
+                - set:
+                    msg: >
+                      Olá, {{apt_full.cliente.nome}}! 😊
+                      Você confirma seu horário **amanhã {{fmt_time(apt_full.dataHoraInicio)}}**
+                      para **{{apt_full.servico.nome}}** com **{{apt_full.profissional.nome}}**?
+                      Responda **S** para confirmar ou **N** para reagendar.
+                - tool: "wa.send_message"
+                  args: { phone: "{{apt_full.cliente.telefone}}", text: "{{msg}}" }
+                - tool: "db.notifications_log"
+                  args:
+                    dedupe_key: "{{dedupe_key}}"
+                    phone: "{{apt_full.cliente.telefone}}"
+                    kind: "previsit"
+                    payload:
+                      appointment_id: "{{apt_full.id}}"
+                      start_iso: "{{apt_full.dataHoraInicio}}"
+                      service_id: "{{apt_full.servico.id}}"
+                      professional_id: "{{apt_full.profissional.id}}"
+
+  divergence_audit_hourly:
+    enabled: "{{env.AUDIT_ENABLED}}"
+    cron: "15 * * * *"    # a cada hora: checa divergência do dia seguinte (pré-visita)
+    timezone: "{{env.TIMEZONE}}"
+    steps:
+      - set: { date_target: "{{tomorrow_local_date(env.timezone)}}" }
+      - tool: "db.audit_divergences"
+        args: { date: "{{date_target}}" }
+        save_as: "diff"
+      - metric_gauge_set:
+          name: "auto_msg_divergences"
+          labels: { date: "{{date_target}}" }
+          value: "{{diff.count}}"
+
+# ---------------------- RETRY POLICIES ----------------------------------------
+retry_policy:
+  network:
+    maxRetries: 3
+    baseDelay: 1000      # 1 segundo
+    maxDelay: 30000      # 30 segundos
+    jitter: true
+    backoffMultiplier: 2
+  
+  database:
+    maxRetries: 2
+    baseDelay: 500       # 500ms
+    maxDelay: 5000       # 5 segundos
+    jitter: false
+    backoffMultiplier: 2
+
+# ---------------------- ENVIRONMENT DEFAULTS ----------------------------------
+defaults:
+  timezone: "America/Sao_Paulo"
+  previsit_hour: 18      # 18:00 (6 PM)
+  audit_enabled: true
+  previsit_enabled: true
+  
+# ---------------------- TEMPLATES CONFIGURATION -------------------------------
+templates:
+  previsit:
+    default: |
+      Olá, {{cliente.nome}}! 😊
+      Você confirma seu horário **amanhã {{fmt_time(dataHoraInicio)}}**
+      para **{{servico.nome}}** com **{{profissional.nome}}**?
+      Responda **S** para confirmar ou **N** para reagendar.
+    
+    with_location: |
+      Olá, {{cliente.nome}}! 😊
+      Você confirma seu horário **amanhã {{fmt_time(dataHoraInicio)}}**
+      para **{{servico.nome}}** com **{{profissional.nome}}**?
+      📍 Local: {{unidade.endereco}}
+      Responda **S** para confirmar ou **N** para reagendar.
+  
+  confirmation:
+    confirmed: |
+      ✅ Perfeito, {{cliente.nome}}!
+      Seu horário está confirmado para **amanhã {{fmt_time(dataHoraInicio)}}**.
+      Nos vemos em breve! 😊
+    
+    rescheduled: |
+      📅 Entendi, {{cliente.nome}}!
+      Vamos reagendar seu horário. Em breve nossa equipe entrará em contato
+      com as opções disponíveis.
+
+# ---------------------- MONITORING & ALERTS -----------------------------------
+monitoring:
+  metrics:
+    enabled: true
+    retention_hours: 24
+    
+  alerts:
+    high_divergence_threshold: 10
+    failed_sends_threshold: 5
+    
+  health_checks:
+    trinks_api: true
+    whatsapp_api: true
+    database: true
+    redis: true

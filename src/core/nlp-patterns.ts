@@ -21,40 +21,40 @@ export class NLPPatterns {
     // Opção 1: Agendar atendimento
     option_1: [
       /^\s*1\s*$/,
-      /(?i)\b(op[cç][aã]o\s*1|um|1\.|n[uú]mero\s*1)\b/,
-      /(?i)\bquero\s*(agendar|marcar)\b/,
-      /(?i)\bmarcar\s*(hor[aá]rio|atendimento)\b/
+      /\b(op[cç][aã]o\s*1|um|1\.|n[uú]mero\s*1)\b/i,
+      /\bquero\s*(agendar|marcar)\b/i,
+      /\bmarcar\s*(hor[aá]rio|atendimento)\b/i
     ],
     
     // Opção 2: Informações
     option_2: [
       /^\s*2\s*$/,
-      /(?i)\b(op[cç][aã]o\s*2|dois|2\.|n[uú]mero\s*2)\b/,
-      /(?i)\b(quero|preciso)\s*(de )?informa(c|ç)[aã]o(e?s)?\b/
+      /\b(op[cç][aã]o\s*2|dois|2\.|n[uú]mero\s*2)\b/i,
+      /\b(quero|preciso)\s*(de )?informa(c|ç)[aã]o(e?s)?\b/i
     ],
     
     // Agendamento explícito (inequívoco)
     explicit_schedule: [
-      /(?i)\b(quero\s*agendar|agendar\s*atendimento|marcar\s*agora)\b/,
-      /(?i)\b(preciso\s*marcar|vou\s*agendar|quero\s*marcar\s*hor[aá]rio)\b/,
-      /(?i)\b(agendar\s*para|marcar\s*para\s*(hoje|amanh[aã]|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo))\b/
+      /\b(quero\s*agendar|agendar\s*atendimento|marcar\s*agora)\b/i,
+      /\b(preciso\s*marcar|vou\s*agendar|quero\s*marcar\s*hor[aá]rio)\b/i,
+      /\b(agendar\s*para|marcar\s*para\s*(hoje|amanh[aã]|segunda|ter[cç]a|quarta|quinta|sexta|s[aá]bado|domingo))\b/i
     ],
     
     // Agendamento ambíguo (requer confirmação)
     ambiguous_schedule: [
-      /(?i)\bagenda(r)?\b/,
-      /(?i)\bver\s*agenda\b/,
-      /(?i)\bhor[áa]rios?\b/,
-      /(?i)\b(quando|que\s*horas?)\b/,
-      /(?i)\b(dispon[ií]vel|vaga)\b/
+      /\bagenda(r)?\b/i,
+      /\bver\s*agenda\b/i,
+      /\bhor[áa]rios?\b/i,
+      /\b(quando|que\s*horas?)\b/i,
+      /\b(dispon[ií]vel|vaga)\b/i
     ],
     
     // Stop words (cancelar/encerrar)
     stop_words: [
-      /(?i)\bcancelar\s*atendimento\b/,
-      /(?i)\bencerrar\b/,
-      /(?i)\b(parar|sair|tchau|obrigad[oa])\b/,
-      /(?i)\b(n[aã]o\s*quero|desistir)\b/
+      /\bcancelar\s*atendimento\b/i,
+      /\bencerrar\b/i,
+      /\b(parar|sair|tchau|obrigad[oa])\b/i,
+      /\b(n[aã]o\s*quero|desistir)\b/i
     ]
   };
 

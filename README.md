@@ -1,4 +1,4 @@
-# Ateliê Marcleia Abade - Sistema de Agendamento
+# Syncbelle - Sistema de Agendamento
 
 Sistema de agendamento via WhatsApp integrado com a API Trinks, incluindo funcionalidades de segurança, observabilidade e performance.
 
@@ -99,9 +99,9 @@ Criados automaticamente via migration `001_create_indexes.sql`:
 ### Variáveis de Ambiente
 
 ```env
-# Banco de Dados
-DATABASE_URL=postgresql://user:password@localhost:5432/database
-DATABASE_SSL=false
+# Banco de Dados (Supabase)
+DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@db.[YOUR-PROJECT-REF].supabase.co:5432/postgres
+DATABASE_SSL=true
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -161,11 +161,43 @@ PORT=3000
 NODE_ENV=production
 ```
 
+### Configuração do Supabase
+
+1. **Criar projeto no Supabase**:
+   - Acesse [supabase.com](https://supabase.com)
+   - Crie um novo projeto
+   - Anote a URL de conexão e senha do banco
+
+2. **Configurar variáveis de ambiente**:
+   ```bash
+   cp .env.supabase.example .env
+   ```
+   - Edite o arquivo `.env` com suas credenciais do Supabase
+   - A URL deve seguir o formato: `postgresql://postgres:[PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres`
+
+3. **Executar migrações**:
+   ```bash
+   # Executar todas as migrações em ordem
+   node scripts/run-migration.js
+   
+   # Ou executar manualmente no SQL Editor do Supabase
+   # Copie e execute os arquivos da pasta migrations/ em ordem numérica
+   ```
+
+4. **Configurar Row Level Security (RLS)**:
+   - As migrações já incluem as políticas RLS necessárias
+   - Verifique se o RLS está habilitado nas tabelas principais
+   - Teste o isolamento de dados por tenant
+
 ### Instalação
 
 ```bash
 # Instalar dependências
 npm install
+
+# Configurar ambiente
+cp .env.supabase.example .env
+# Editar .env com suas credenciais
 
 # Executar migrations
 node scripts/run-migration.js

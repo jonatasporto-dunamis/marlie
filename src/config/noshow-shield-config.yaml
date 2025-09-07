@@ -1,0 +1,131 @@
+# ---------------------- NO-SHOW SHIELD (INBOUND) -------------------------------
+nlp:
+  patterns:
+    yes: ['^\s*(s|sim|confirmo|ok)\s*$', '(?i)\b(confirmado)\b']
+    no:  ['^\s*(n|nao|não|reagendar)\s*$']
+
+responses:
+  ask_slots: |
+    Sem problemas! Aqui estão os próximos horários:
+    1) {{slots.0.start_human}} — {{slots.0.prof}}
+    2) {{slots.1.start_human}} — {{slots.1.prof}}
+    3) {{slots.2.start_human}} — {{slots.2.prof}}
+    Responda **1**, **2** ou **3** para escolher.
+  confirm_rebook: |
+    Perfeito, reagendei para **{{new_start_human}}** com **{{new_prof}}**. ✅
+  confirm_yes: "Obrigada! Sua presença está confirmada. Até lá! ✨"
+  invalid_choice: "Não entendi. Responda **1**, **2** ou **3**."
+  error_generic: "Tive um probleminha aqui. Pode tentar novamente em instantes?"
+
+state_machine:
+  initial_state: "IDLE"
+  states:
+    IDLE:
+      on_user_message:
+        # Ativado quando o cliente responde a uma pré-visita
+        - if: "{{context.last_outbound_kind == 'previsit'}}"
+          then: { transition: "NOSHOW_DECISION" }
+        - else: { stay: true }
+
+    NOSHOW_DECISION:
+      on_user_message:
+        - if: "{{nlp.match(patterns.yes, input.text)}}"
+          then:
+            - reply: { template: "confirm_yes" }
+            - log_metric_counter: { name: "pre_visit_confirm_yes_total" }
+            - transition: "IDLE"
+        - elif: "{{nlp.match(patterns.no, input.text)}}"
+          then:
+            - transition: "REBOOK_OFFER"
+        - else:
+          - reply: { template: "error_generic" }
+          - stay: true
+
+    REBOOK_OFFER:
+      on_enter:
+        - set:
+            service_id: "{{context.appointment.service_id}}"
+            prof_id:    "{{context.appointment.professional_id}}"
+            from_iso:   "{{now_local_iso(env.timezone)}}"
+        - tool: "trinks.search_slots"
+          args:
+            service_id: "{{service_id}}"
+            professional_id: "{{prof_id}}"
+            date_from_iso: "{{from_iso}}"
+            limit: 3
+          retry: "{{retry_policy.network}}"
+          save_as: "slot_list"
+        - if: "{{slot_list.count == 0}}"
+          then:
+            - # fallback: sem prof_id (qualquer profissional)
+              tool: "trinks.search_slots"
+              args:
+                service_id: "{{service_id}}"
+                date_from_iso: "{{from_iso}}"
+                limit: 3
+              retry: "{{retry_policy.network}}"
+              save_as: "slot_list"
+        - set:
+            slots:
+              - { start_iso: "{{slot_list[0].start}}", start_human: "{{fmt_dt(slot_list[0].start)}}", prof: "{{slot_list[0].prof_name}}", prof_id: "{{slot_list[0].prof_id}}" }
+              - { start_iso: "{{slot_list[1].start}}", start_human: "{{fmt_dt(slot_list[1].start)}}", prof: "{{slot_list[1].prof_name}}", prof_id: "{{slot_list[1].prof_id}}" }
+              - { start_iso: "{{slot_list[2].start}}", start_human: "{{fmt_dt(slot_list[2].start)}}", prof: "{{slot_list[2].prof_name}}", prof_id: "{{slot_list[2].prof_id}}" }
+        - reply: { template: "ask_slots" }
+        - transition: "REBOOK_WAIT_CHOICE"
+
+    REBOOK_WAIT_CHOICE:
+      on_user_message:
+        - match:
+            one: '^\s*1\s*$'
+            two: '^\s*2\s*$'
+            three: '^\s*3\s*$'
+        - if: "{{one || two || three}}"
+          then:
+            - set:
+                idx: "{{ one?0 : (two?1:2) }}"
+                chosen: "{{slots[idx]}}"
+            - tool: "trinks.rebook"
+              args:
+                appointment_id: "{{context.appointment.id}}"
+                new_start_iso: "{{chosen.start_iso}}"
+                service_id: "{{context.appointment.service_id}}"
+                professional_id: "{{chosen.prof_id}}"
+              retry: "{{retry_policy.network}}"
+              save_as: "rebooked"
+            - if: "{{!rebooked.ok}}"
+              then:
+                - reply: { template: "error_generic" }
+                - stay: true
+            - reply:
+                template: "confirm_rebook"
+                vars:
+                  new_start_human: "{{chosen.start_human}}"
+                  new_prof: "{{chosen.prof}}"
+            - tool: "db.notifications_log"
+              args:
+                dedupe_key: "rebook:{{context.appointment.id}}:{{chosen.start_iso}}"
+                phone: "{{user.phone}}"
+                kind: "rebook"
+                payload:
+                  new_start_iso: "{{chosen.start_iso}}"
+                  prof_id: "{{chosen.prof_id}}"
+            - log_metric_counter: { name: "rebook_created_total" }
+            - transition: "IDLE"
+        - else:
+          - reply: { template: "invalid_choice" }
+          - stay: true
+
+observability:
+  prometheus:
+    http_endpoint: "/metrics"
+    labels: { app: "marlie", component: "auto_msg" }
+    counters:
+      - { name: "pre_visit_sent_total", help: "Pré-visita enviada" }
+      - { name: "pre_visit_confirm_yes_total", help: "Confirmações S" }
+      - { name: "pre_visit_confirm_no_total", help: "Respostas N" }
+      - { name: "rebook_created_total", help: "Reagendamentos criados" }
+      - { name: "trinks_http_errors_total", help: "Erros de API Trinks", labels: ["endpoint","code"] }
+    gauges:
+      - { name: "auto_msg_divergences", help: "Divergências agenda vs notificado", labels: ["date"] }
+    histograms:
+      - { name: "trinks_http_duration_seconds", help: "Latência chamadas Trinks", labels: ["endpoint"], buckets: [0.1,0.25,0.5,1,2,3,5] }

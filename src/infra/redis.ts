@@ -163,7 +163,7 @@ export class RedisHelper {
         return null;
       }
       
-      return JSON.parse(result);
+      return JSON.parse(result as string);
     } catch (error) {
       logger.error('Error getting conversation state:', { error, tenantId, phone });
       return null;
@@ -262,7 +262,7 @@ export class RedisHelper {
         return null;
       }
       
-      return JSON.parse(result);
+      return JSON.parse(result as string);
     } catch (error) {
       logger.error('Error getting catalog cache:', { error, tenantId });
       return null;
@@ -320,7 +320,7 @@ export class RedisHelper {
         return null;
       }
       
-      return JSON.parse(result);
+      return JSON.parse(result as string);
     } catch (error) {
       logger.error('Error getting idempotency result:', { error, tenantId, hash });
       return null;
@@ -386,7 +386,7 @@ export class RedisHelper {
       const key = this.getKey('rl', tenantId, identifier, window);
       const result = await redis.get(key);
       
-      return result ? parseInt(result, 10) : 0;
+      return result ? parseInt(result as string, 10) : 0;
     } catch (error) {
       logger.error('Error getting rate limit count:', { error, tenantId, identifier, window });
       return 0;

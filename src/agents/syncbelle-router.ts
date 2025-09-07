@@ -1,7 +1,7 @@
 import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import { logger } from '../utils/logger';
-import { MessageBufferService } from '../services/message-buffer';
+import { MessageBuffer } from '../services/message-buffer';
 import { HumanHandoffService } from '../services/human-handoff';
 import { ValidationService } from '../services/validation-service';
 import { ResponseTemplateService, TemplateContext } from '../services/response-templates';
@@ -9,7 +9,7 @@ import { CatalogService } from '../services/catalog-service';
 import { TrinksService } from '../services/trinks-service';
 import { NLPPatterns } from '../core/nlp-patterns';
 
-export interface MarlieConfig {
+export interface SyncbelleConfig {
   temperature: number;
   top_p: number;
   max_tokens: number;
@@ -36,7 +36,7 @@ export interface ConversationMessage {
   metadata?: Record<string, any>;
 }
 
-export interface MarlieResponse {
+export interface SyncbelleResponse {
   message: string;
   action: 'send_message' | 'transfer_human' | 'schedule_appointment' | 'provide_info' | 'request_clarification';
   metadata?: {
@@ -47,11 +47,11 @@ export interface MarlieResponse {
   };
 }
 
-export class MarlieRouterAgent {
+export class SyncbelleRouterAgent {
   private redis: Redis;
   private db: Pool;
-  private config: MarlieConfig;
-  private messageBuffer: MessageBufferService;
+  private config: SyncbelleConfig;
+  private messageBuffer: MessageBuffer;
   private handoffService: HumanHandoffService;
   private validationService: ValidationService;
   private templateService: ResponseTemplateService;
@@ -66,7 +66,7 @@ export class MarlieRouterAgent {
   constructor(
     redis: Redis,
     db: Pool,
-    messageBuffer: MessageBufferService,
+    messageBuffer: MessageBuffer,
     handoffService: HumanHandoffService,
     validationService: ValidationService,
     templateService: ResponseTemplateService,
@@ -121,7 +121,7 @@ export class MarlieRouterAgent {
         return {
           message: '', // Não responde ainda
           action: 'send_message',
-          metadata: { buffer_waiting: true }
+          metadata: { template_used: 'buffer_waiting' }
         };
       }
 
@@ -157,7 +157,7 @@ export class MarlieRouterAgent {
       return {
         message: 'Desculpe, ocorreu um erro interno. Tente novamente em alguns instantes.',
         action: 'send_message',
-        metadata: { error: true }
+        metadata: { template_used: 'error_occurred' }
       };
     }
   }
@@ -208,9 +208,8 @@ export class MarlieRouterAgent {
       message,
       action: 'send_message',
       metadata: {
-        template_used: 'menu_welcome',
-        state_transition: 'initial -> menu_shown'
-      }
+          template_used: 'menu_welcome'
+        }
     };
   }
 
@@ -223,10 +222,13 @@ export class MarlieRouterAgent {
     tenantId: string
   ): Promise<MarlieResponse> {
     // Detecta opção usando NLP patterns
-    const option1Match = this.nlpPatterns.matchesPattern(message, 'option_1');
-    const option2Match = this.nlpPatterns.matchesPattern(message, 'option_2');
-    const explicitSchedule = this.nlpPatterns.matchesPattern(message, 'explicit_schedule');
-    const ambiguousSchedule = this.nlpPatterns.matchesPattern(message, 'ambiguous_schedule');
+    const menuOption = this.nlpPatterns.isValidMenuOption(message);
+    const schedulingIntent = this.nlpPatterns.hasSchedulingIntent(message);
+    
+    const option1Match = menuOption === '1';
+    const option2Match = menuOption === '2';
+    const explicitSchedule = schedulingIntent.hasIntent && schedulingIntent.isExplicit;
+    const ambiguousSchedule = schedulingIntent.hasIntent && !schedulingIntent.isExplicit;
     
     // Opção 1: Agendar
     if (option1Match || explicitSchedule) {
@@ -249,10 +251,10 @@ export class MarlieRouterAgent {
       session.selected_option = '2';
       session.state = 'processing_info';
       
-      const message = this.templateService.render('business_info', session.context);
+      const businessInfoMessage = this.templateService.render('business_info', session.context);
       
       return {
-        message: message + '\n\nPrecisa de mais alguma informação?',
+        message: businessInfoMessage + '\n\nPrecisa de mais alguma informação?',
         action: 'provide_info',
         metadata: {
           template_used: 'business_info',
@@ -265,10 +267,10 @@ export class MarlieRouterAgent {
     
     // Agendamento ambíguo - pede confirmação
     if (ambiguousSchedule) {
-      const message = this.templateService.render('confirm_intent', session.context);
+      const confirmMessage = this.templateService.render('confirm_intent', session.context);
       
       return {
-        message,
+        message: confirmMessage,
         action: 'request_clarification',
         metadata: {
           template_used: 'confirm_intent',
@@ -280,10 +282,10 @@ export class MarlieRouterAgent {
     
     // Opção inválida
     session.state = 'awaiting_option';
-    const message = this.templateService.render('invalid_option', session.context);
+    const invalidOptionMessage = this.templateService.render('invalid_option', session.context);
     
     return {
-      message,
+      message: invalidOptionMessage,
       action: 'request_clarification',
       metadata: {
         template_used: 'invalid_option',
@@ -355,7 +357,7 @@ export class MarlieRouterAgent {
           message: `Ótima escolha! **${service.nome}** (${service.duracao}min - ${service.preco})\n\nAgora preciso que você escolha a data e horário. Que dia e horário prefere?`,
           action: 'schedule_appointment',
           metadata: {
-            service_selected: service,
+            template_used: 'service_selected',
             confidence: validation.confidence
           }
         };
@@ -370,7 +372,7 @@ export class MarlieRouterAgent {
       return {
         message: 'Ocorreu um erro ao processar sua solicitação. Tente novamente.',
         action: 'send_message',
-        metadata: { error: true }
+        metadata: { template_used: 'error_occurred' }
       };
     }
   }
@@ -383,8 +385,8 @@ export class MarlieRouterAgent {
     message: string
   ): Promise<MarlieResponse> {
     // Verifica se quer voltar ao menu ou fazer agendamento
-    const option1Match = this.nlpPatterns.matchesPattern(message, 'option_1');
-    const explicitSchedule = this.nlpPatterns.matchesPattern(message, 'explicit_schedule');
+    const option1Match = this.nlpPatterns.isValidMenuOption(message, '1');
+    const explicitSchedule = this.nlpPatterns.hasSchedulingIntent(message);
     
     if (option1Match || explicitSchedule) {
       session.selected_option = '1';
@@ -394,8 +396,7 @@ export class MarlieRouterAgent {
         message: 'Perfeito! Vou ajudar você a agendar um atendimento. 📅\n\nQual serviço você gostaria de agendar?',
         action: 'send_message',
         metadata: {
-          detected_intent: 'schedule',
-          state_transition: 'processing_info -> processing_schedule'
+          detected_intent: 'schedule'
         }
       };
     }
@@ -438,8 +439,7 @@ export class MarlieRouterAgent {
           message: `Perfeito! **${selectedService.nome}** (${selectedService.duracao}min - ${selectedService.preco})\n\nAgora preciso que você escolha a data e horário. Que dia e horário prefere?`,
           action: 'schedule_appointment',
           metadata: {
-            service_selected: selectedService,
-            state_transition: 'confirming_service -> processing_schedule'
+            template_used: 'service_selected'
           }
         };
       }
@@ -450,7 +450,7 @@ export class MarlieRouterAgent {
       message: 'Por favor, escolha uma das opções numeradas (1, 2 ou 3) ou descreva melhor o serviço que deseja.',
       action: 'request_clarification',
       metadata: {
-        invalid_option: message
+        template_used: 'invalid_option'
       }
     };
   }
@@ -635,18 +635,18 @@ export class MarlieRouterAgent {
 }
 
 // Factory function
-export function createMarlieRouter(
+export function createSyncbelleRouter(
   redis: Redis,
   db: Pool,
-  messageBuffer: MessageBufferService,
+  messageBuffer: MessageBuffer,
   handoffService: HumanHandoffService,
   validationService: ValidationService,
   templateService: ResponseTemplateService,
   catalogService: CatalogService,
   trinksService: TrinksService,
-  config?: Partial<MarlieConfig>
-): MarlieRouterAgent {
-  const defaultConfig: MarlieConfig = {
+  config?: Partial<SyncbelleConfig>
+): SyncbelleRouterAgent {
+  const defaultConfig: SyncbelleConfig = {
     temperature: 0.2,
     top_p: 0.9,
     max_tokens: 400,
@@ -654,7 +654,7 @@ export function createMarlieRouter(
     safety: { profanity_filter: 'mild' }
   };
   
-  return new MarlieRouterAgent(
+  return new SyncbelleRouterAgent(
     redis,
     db,
     messageBuffer,

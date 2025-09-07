@@ -13,6 +13,7 @@ import { healthHandler, readyHandler } from './middleware/health';
 import { tenantMiddleware } from './middleware/tenant';
 import { createPIIMaskingMiddleware, PRODUCTION_PII_CONFIG } from './middleware/piiMasking';
 import adminRoutes from './routes/admin';
+import adminPrevisitRoutes from './routes/admin-previsit';
 import { getRedis } from './infra/redis';
 import { pool } from './infra/db';
 
@@ -117,6 +118,7 @@ app.get('/metrics', metricsHandler);
 
 // Rotas administrativas
 app.use('/admin', adminRoutes);
+app.use('/admin/previsit', adminPrevisitRoutes);
 
 // Ping simples para diagnosticar
 app.get('/__ping', (_req, res) => res.json({ ok: true, at: 'root' }));

@@ -11,7 +11,6 @@ services:
     env_file:
       - .env
     depends_on:
-      - postgres
       - redis
     restart: unless-stopped
     healthcheck:
@@ -21,23 +20,8 @@ services:
       retries: 3
       start_period: 40s
 
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: agentes_ia
-      POSTGRES_USER: marcleiaabade
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-defaultpassword}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U marcleiaabade -d agentes_ia"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # PostgreSQL removido - agora usando Supabase como banco de dados gerenciado
+  # Para usar localmente, configure DATABASE_URL no .env apontando para sua instância Supabase
 
   redis:
     image: redis:7-alpine
@@ -53,7 +37,6 @@ services:
       retries: 3
 
 volumes:
-  postgres_data:
   redis_data:
 
 networks:

@@ -1,4 +1,4 @@
-import winston from 'winston';
+import * as winston from 'winston';
 
 /**
  * Mask PII (Personally Identifiable Information) in log messages

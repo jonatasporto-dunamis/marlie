@@ -1,0 +1,408 @@
+# Configuração do Módulo Marlie Quality
+# Testes E2E, Testes de Contrato, Seeds e Pipeline CI/CD
+
+# ==================== CONFIGURAÇÕES GLOBAIS ====================
+global:
+  module_name: "marlie-quality"
+  version: "1.0.0"
+  environment: "{{env.NODE_ENV|default:development}}"
+  timezone: "America/Bahia"
+  debug: "{{env.DEBUG|default:false}}"
+  
+# ==================== BANCO DE DADOS ====================
+database:
+  # Configurações específicas para ambiente de teste
+  test_schema: "quality_test"
+  seed_batch_size: 100
+  cleanup_on_reset: true
+  backup_before_reset: true
+  
+  # Tabelas que serão gerenciadas pelos seeds
+  managed_tables:
+    - "clients"
+    - "services" 
+    - "professionals"
+    - "appointments"
+    - "whatsapp_conversations"
+    - "trinks_transactions"
+    - "upsell_events"
+  
+  # Dados de seed padrão
+  default_seed_data:
+    clients_count: 10
+    services_count: 5
+    professionals_count: 3
+    appointments_count: 15
+
+# ==================== TESTES E2E ====================
+tests:
+  timezone: "America/Sao_Paulo"
+  e2e:
+    timeout: 30000
+    parallel: false
+    retry_attempts: 2
+  contract:
+    timeout: 10000
+    retry_attempts: 1
+  e2e_suites:
+    - name: "booking_flow_ok"
+      description: "Fluxo feliz: inbound → menu → serviço → horário → confirmação → Trinks OK."
+      arrange:
+        seed:
+          rows: 3
+        use_trinks_stubs: true
+      steps:
+        - action: "inject_message"
+          with:
+            phone: "5573999887065"
+            text: "Olá"
+        - expect_reply_contains: ["1) Agendar", "2) Informações"]
+        - action: "inject_message"
+          with:
+            phone: "5573999887065"
+            text: "1"
+        - action: "set_slot"
+          with:
+            service_id: "SVC-001"
+            start_iso: "{{add_minutes(now_local_iso(env.timezone), 120)}}"
+        - action: "call_tool"
+          with:
+            tool: "{{ env.USE_TRINKS_STUBS ? 'trinks.stub_validate_availability' : 'trinks.validate_availability' }}"
+            args:
+              service_id: "SVC-001"
+              start_iso: "{{slots.start_iso}}"
+          save_as: "val"
+        - assert:
+            expr: "{{val.ok == true}}"
+        - expect_state: "SCHEDULING_CONFIRMED"
+        - action: "call_tool"
+          with:
+            tool: "{{ env.USE_TRINKS_STUBS ? 'evolution.stub_send' : 'wa.send_message' }}"
+            args:
+              phone: "5573999887065"
+              text: "Confirmação enviada"
+          save_as: "ev"
+        - action: "call_tool"
+          with:
+            tool: "contract.assert_shape"
+            args:
+              schema_ref: "evolution_send_message"
+              payload: "{{ev}}"
+      cleanup:
+        - action: "seed_reset"
+    - name: "booking_disambiguation_then_ok"
+      description: "Usuário digita categoria; sistema oferece top-3; usuário escolhe."
+      steps:
+        - action: "inject_message"
+          with:
+            phone: "5573999887065"
+            text: "cabelo"
+        - expect_reply_contains: ["1)", "2)", "3)"]
+        - action: "inject_message"
+          with:
+            phone: "5573999887065"
+            text: "2"
+        - expect_slot:
+            name: "service_id"
+            not_null: true
+        - expect_state: "VALIDATE_BEFORE_CONFIRM"
+  contract_suites:
+    - name: "trinks_fetch_contract"
+      steps:
+        - action: "call_tool"
+          with:
+            tool: "{{ env.USE_TRINKS_STUBS ? 'trinks.stub_fetch_appointments' : 'trinks.fetch_appointments' }}"
+            args:
+              dataInicio: "{{today_local_date(env.timezone)}}T00:01:00"
+              dataFim: "{{today_local_date(env.timezone)}}T23:59:00"
+          save_as: "resp"
+        - action: "call_tool"
+          with:
+            tool: "contract.assert_shape"
+            args:
+              schema_ref: "trinks_appointment"
+              payload: "{{resp.items[0]}}"
+    - name: "trinks_validate_contract"
+      steps:
+        - action: "call_tool"
+          with:
+            tool: "{{ env.USE_TRINKS_STUBS ? 'trinks.stub_validate_availability' : 'trinks.validate_availability' }}"
+            args:
+              service_id: "SVC-001"
+              start_iso: "{{now_local_iso(env.timezone)}}"
+          save_as: "out"
+        - action: "call_tool"
+          with:
+            tool: "contract.assert_shape"
+            args:
+              schema_ref: "trinks_validate_availability"
+              payload: "{{out}}"
+
+# ==================== TESTES DE CONTRATO ====================
+contract_tests:
+  # Configurações gerais
+  timeout: 10000
+  retry_attempts: 2
+  
+  # Contratos das APIs externas
+  contracts:
+    trinks:
+      name: "API Trinks"
+      base_url: "{{env.TRINKS_API_URL}}"
+      auth_header: "Authorization"
+      auth_token: "{{env.TRINKS_API_TOKEN}}"
+      
+      endpoints:
+        create_payment:
+          method: "POST"
+          path: "/payments"
+          required_fields: ["amount", "customer", "description"]
+          response_schema:
+            type: "object"
+            required: ["id", "status", "amount"]
+        
+        get_payment:
+          method: "GET"
+          path: "/payments/{id}"
+          response_schema:
+            type: "object"
+            required: ["id", "status", "amount", "created_at"]
+        
+        webhook_notification:
+          method: "POST"
+          path: "/webhook"
+          required_fields: ["event", "payment_id", "status"]
+    
+    evolution:
+      name: "API Evolution (WhatsApp)"
+      base_url: "{{env.EVOLUTION_API_URL}}"
+      auth_header: "apikey"
+      auth_token: "{{env.EVOLUTION_API_KEY}}"
+      
+      endpoints:
+        send_message:
+          method: "POST"
+          path: "/message/sendText/{instance}"
+          required_fields: ["number", "text"]
+          response_schema:
+            type: "object"
+            required: ["key", "message"]
+        
+        get_instance:
+          method: "GET"
+          path: "/instance/fetchInstances"
+          response_schema:
+            type: "array"
+            items:
+              type: "object"
+              required: ["instance", "status"]
+
+# ==================== PIPELINE CI/CD ====================
+pipeline:
+  # Comandos do pipeline
+  build_command: "npm run build"
+  lint_command: "npm run lint"
+  test_command: "npm run test"
+  scan_command: "npm audit --audit-level=high"
+  deploy_command: "npm run deploy"
+  
+  # Configurações de deploy
+  deploy:
+    staging:
+      url: "https://staging.marlie.app"
+      health_check_path: "/health"
+      health_check_timeout: 30000
+      rollback_enabled: true
+    
+    production:
+      url: "https://marlie.app"
+      health_check_path: "/health"
+      health_check_timeout: 60000
+      rollback_enabled: true
+      approval_required: true
+  
+  # Critérios de qualidade
+  quality_gates:
+    test_coverage_min: 80
+    lint_errors_max: 0
+    security_vulnerabilities_max: 0
+    build_time_max: 300000  # 5 minutos
+  
+  # Notificações
+  notifications:
+    slack:
+      enabled: "{{env.SLACK_NOTIFICATIONS|default:false}}"
+      webhook_url: "{{env.SLACK_WEBHOOK_URL}}"
+      channels:
+        success: "#deployments"
+        failure: "#alerts"
+    
+    email:
+      enabled: "{{env.EMAIL_NOTIFICATIONS|default:false}}"
+      smtp_host: "{{env.SMTP_HOST}}"
+      recipients: ["dev@marlie.app"]
+
+# ==================== MÉTRICAS E MONITORAMENTO ====================
+metrics:
+  # Métricas de testes
+  test_metrics:
+    track_execution_time: true
+    track_success_rate: true
+    track_error_patterns: true
+    retention_days: 30
+  
+  # Métricas de pipeline
+  pipeline_metrics:
+    track_build_time: true
+    track_deploy_frequency: true
+    track_failure_rate: true
+    track_rollback_frequency: true
+  
+  # Exportação para Prometheus
+  prometheus:
+    enabled: "{{env.PROMETHEUS_ENABLED|default:true}}"
+    port: 9090
+    path: "/metrics"
+    
+    # Métricas customizadas
+    custom_metrics:
+      - name: "marlie_quality_tests_total"
+        type: "counter"
+        description: "Total number of quality tests executed"
+        labels: ["type", "status", "environment"]
+      
+      - name: "marlie_quality_test_duration_seconds"
+        type: "histogram"
+        description: "Duration of quality tests in seconds"
+        labels: ["type", "environment"]
+      
+      - name: "marlie_pipeline_builds_total"
+        type: "counter"
+        description: "Total number of pipeline builds"
+        labels: ["stage", "status", "environment"]
+      
+      - name: "marlie_deploy_frequency"
+        type: "gauge"
+        description: "Deployment frequency per day"
+        labels: ["environment"]
+
+# ==================== LOGS ====================
+logging:
+  level: "{{env.LOG_LEVEL|default:info}}"
+  format: "json"
+  
+  # Retenção de logs
+  retention:
+    test_logs: 7  # dias
+    pipeline_logs: 30  # dias
+    error_logs: 90  # dias
+  
+  # Destinos de log
+  destinations:
+    file:
+      enabled: true
+      path: "./logs/marlie-quality.log"
+      max_size: "100MB"
+      max_files: 10
+    
+    elasticsearch:
+      enabled: "{{env.ELASTICSEARCH_ENABLED|default:false}}"
+      host: "{{env.ELASTICSEARCH_HOST}}"
+      index: "marlie-quality-logs"
+
+# ==================== SEGURANÇA ====================
+security:
+  # Autenticação para APIs admin
+  admin_auth:
+    token_header: "Authorization"
+    token_prefix: "Bearer"
+    token_validation: "jwt"
+  
+  # Rate limiting
+  rate_limiting:
+    enabled: true
+    window_ms: 900000  # 15 minutos
+    max_requests: 100
+  
+  # Sanitização de dados
+  data_sanitization:
+    mask_sensitive_data: true
+    sensitive_fields: ["password", "token", "api_key"]
+    log_sanitization: true
+
+# ==================== CACHE ====================
+cache:
+  # Cache de resultados de teste
+  test_results:
+    enabled: true
+    ttl: 3600  # 1 hora
+    max_entries: 1000
+  
+  # Cache de configurações
+  config_cache:
+    enabled: true
+    ttl: 300  # 5 minutos
+  
+  # Redis (se disponível)
+  redis:
+    enabled: "{{env.REDIS_ENABLED|default:false}}"
+    host: "{{env.REDIS_HOST|default:localhost}}"
+    port: "{{env.REDIS_PORT|default:6379}}"
+    db: "{{env.REDIS_DB|default:2}}"
+
+# ==================== INTEGRAÇÕES ====================
+integrations:
+  # Webhook para notificações
+  webhooks:
+    test_completion:
+      enabled: "{{env.WEBHOOK_ENABLED|default:false}}"
+      url: "{{env.WEBHOOK_URL}}"
+      secret: "{{env.WEBHOOK_SECRET}}"
+    
+    pipeline_events:
+      enabled: "{{env.PIPELINE_WEBHOOK_ENABLED|default:false}}"
+      url: "{{env.PIPELINE_WEBHOOK_URL}}"
+  
+  # Integração com ferramentas externas
+  external_tools:
+    jira:
+      enabled: "{{env.JIRA_ENABLED|default:false}}"
+      host: "{{env.JIRA_HOST}}"
+      username: "{{env.JIRA_USERNAME}}"
+      token: "{{env.JIRA_TOKEN}}"
+    
+    github:
+      enabled: "{{env.GITHUB_ENABLED|default:false}}"
+      token: "{{env.GITHUB_TOKEN}}"
+      repository: "{{env.GITHUB_REPOSITORY}}"
+
+# ==================== CONFIGURAÇÕES DE AMBIENTE ====================
+environments:
+  development:
+    debug: true
+    use_stubs: true
+    skip_security_checks: true
+    fast_mode: true
+  
+  staging:
+    debug: false
+    use_stubs: true
+    skip_security_checks: false
+    fast_mode: false
+    auto_deploy: true
+  
+  production:
+    debug: false
+    use_stubs: false
+    skip_security_checks: false
+    fast_mode: false
+    auto_deploy: false
+    require_approval: true
+
+# ==================== FEATURES FLAGS ====================
+feature_flags:
+  parallel_testing: "{{env.PARALLEL_TESTING|default:true}}"
+  advanced_metrics: "{{env.ADVANCED_METRICS|default:true}}"
+  auto_rollback: "{{env.AUTO_ROLLBACK|default:true}}"
+  contract_validation: "{{env.CONTRACT_VALIDATION|default:true}}"
+  performance_testing: "{{env.PERFORMANCE_TESTING|default:false}}"

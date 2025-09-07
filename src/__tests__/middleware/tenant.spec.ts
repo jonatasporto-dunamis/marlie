@@ -36,9 +36,9 @@ describe('Tenant Middleware', () => {
     mockClient = {
       query: jest.fn(),
       release: jest.fn()
-    };
+    } as any;
     
-    mockPool.connect.mockResolvedValue(mockClient);
+    (mockPool.connect as jest.Mock).mockResolvedValue(mockClient);
     
     // Clear all mocks
     jest.clearAllMocks();
@@ -148,7 +148,7 @@ describe('Tenant Middleware', () => {
 
     it('should handle database errors gracefully', async () => {
       const dbError = new Error('Database connection failed');
-      mockPool.connect.mockRejectedValue(dbError);
+      (mockPool.connect as jest.Mock).mockRejectedValue(dbError);
       
       await tenantMiddleware(mockReq as Request, mockRes as Response, mockNext);
       

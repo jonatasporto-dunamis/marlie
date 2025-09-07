@@ -1,0 +1,530 @@
+# =============================================================================
+# DESAMBIGUAÇÃO ORIENTADA POR CATÁLOGO - MARLIE BOT
+# =============================================================================
+# Extensão da máquina de estados para resolver entradas ambíguas usando
+# popularidade dos serviços baseada em agendamentos dos últimos 30 dias.
+#
+# Version: 1.0
+# Language: pt-BR
+# Integration: Complementa state-machine-config.yaml
+
+module:
+  name: "catalog-disambiguation"
+  version: "1.0"
+  language: "pt-BR"
+  description: >
+    Resolve entradas ambíguas de serviços usando dados de popularidade do catálogo local,
+    apresentando top-3 opções numeradas para seleção rápida pelo usuário.
+
+# -----------------------------------------------------------------------------
+# PADRÕES NLP PARA DETECÇÃO DE AMBIGUIDADE
+# -----------------------------------------------------------------------------
+
+nlp:
+  patterns:
+    # Aceita apenas números de 1 a 3
+    numeric_1_3:
+      - '^\s*[1-3]\s*$'
+    
+    # Categorias que requerem desambiguação
+    category_ambiguous:
+      - '(?i)\bcabelo(s)?\b'
+      - '(?i)\b(unha|manicure|pedicure)\b'
+      - '(?i)\bsobrancelh(a|as)\b'
+      - '(?i)\bmaquiagem\b'
+      - '(?i)\bescova(s)?\b'
+      - '(?i)\btratamento capilar\b'
+      - '(?i)\bmechas?\b'
+      - '(?i)\bluzes?\b'
+      - '(?i)\bprogressiva\b'
+      - '(?i)\brelaxamento\b'
+      - '(?i)\bcorte\b'
+      - '(?i)\bpintura\b'
+      - '(?i)\bhidrata[çc][ãa]o\b'
+      - '(?i)\bmassagem\b'
+      - '(?i)\blimpeza de pele\b'
+      - '(?i)\bdesign\b'
+      - '(?i)\bdepila[çc][ãa]o\b'
+    
+    # Termos que indicam busca específica (não ambígua)
+    specific_service:
+      - '(?i)\bcorte de cabelo masculino\b'
+      - '(?i)\bescova progressiva\b'
+      - '(?i)\bmechas/luzes\b'
+      - '(?i)\bmanicure e pedicure\b'
+      - '(?i)\bdesign de sobrancelha\b'
+      - '(?i)\bmaquiagem para festa\b'
+    
+    # Stop words para limpeza
+    stop_words:
+      - '(?i)\b(quero|gostaria|preciso|fazer|marcar)\b'
+      - '(?i)\b(um|uma|o|a|de|da|do|para|com)\b'
+      - '(?i)\b(por favor|pfv|obrigad[ao])\b'
+
+# -----------------------------------------------------------------------------
+# TEMPLATES DE RESPOSTA
+# -----------------------------------------------------------------------------
+
+responses:
+  # Template para apresentar top-3 opções
+  top3_prompt: |
+    Encontrei estas opções mais populares dos últimos 30 dias:
+    
+    1️⃣ **{{top3.0.nome}}** — {{top3.0.duracao}}min — R$ {{top3.0.preco}}
+    2️⃣ **{{top3.1.nome}}** — {{top3.1.duracao}}min — R$ {{top3.1.preco}}
+    3️⃣ **{{top3.2.nome}}** — {{top3.2.duracao}}min — R$ {{top3.2.preco}}
+    
+    Responda com **1**, **2** ou **3**. 🔢
+  
+  # Template quando há menos de 3 opções
+  top2_prompt: |
+    Encontrei estas opções populares:
+    
+    1️⃣ **{{top3.0.nome}}** — {{top3.0.duracao}}min — R$ {{top3.0.preco}}
+    2️⃣ **{{top3.1.nome}}** — {{top3.1.duracao}}min — R$ {{top3.1.preco}}
+    
+    Responda com **1** ou **2**. 🔢
+  
+  # Template para apenas 1 opção
+  single_option: |
+    Encontrei esta opção:
+    
+    ✅ **{{top3.0.nome}}** — {{top3.0.duracao}}min — R$ {{top3.0.preco}}
+    
+    Confirma este serviço? Responda **sim** ou **não**.
+  
+  # Erro de escolha inválida
+  invalid_choice: |
+    ❌ Não entendi sua escolha.
+    
+    Responda com **1**, **2** ou **3** para selecionar uma das opções acima.
+  
+  # Confirmação de seleção
+  persisted_ok: |
+    ✅ Perfeito! Anotei **{{slots.service_name}}** para seguirmos.
+    
+    Agora vamos encontrar um horário disponível! 📅
+  
+  # Quando não há opções disponíveis
+  no_options: |
+    😔 Não encontrei opções disponíveis para "{{input.text}}".
+    
+    Tente ser mais específico ou escolha uma categoria:
+    • Cabelo (corte, escova, progressiva)
+    • Unhas (manicure, pedicure)
+    • Sobrancelha (design, henna)
+    • Estética (limpeza de pele, massagem)
+  
+  # Fallback para erro no catálogo
+  catalog_error: |
+    ⚠️ Estou com dificuldades para acessar o catálogo no momento.
+    
+    Você pode me dizer exatamente qual serviço deseja agendar?
+
+# -----------------------------------------------------------------------------
+# MÁQUINA DE ESTADOS PARA DESAMBIGUAÇÃO
+# -----------------------------------------------------------------------------
+
+state_machine:
+  states:
+    # Estado principal de desambiguação
+    CATALOG_DISAMBIGUATION:
+      description: "Resolve entradas ambíguas com base em popularidade (30d)"
+      
+      on_enter:
+        # Normalizar entrada do usuário
+        - set:
+            cat_norm: "{{normalize_servico_nome(input.text || slots.category || '')}}"
+            original_input: "{{input.text}}"
+        
+        # Verificar se é categoria ambígua ou busca específica
+        - if: "{{nlp.match(patterns.category_ambiguous, input.text)}}"
+          then:
+            # Buscar por categoria
+            - tool: "db.topn_by_category_30d"
+              args:
+                categoria_norm: "{{cat_norm}}"
+                n: 3
+              save_as: "top3"
+              on_error:
+                - reply: { template: "catalog_error" }
+                - transition: "FALLBACK_MANUAL_INPUT"
+          else:
+            # Busca textual livre
+            - tool: "db.search_like"
+              args:
+                term_norm: "{{cat_norm}}"
+                n: 3
+                similarity_threshold: 0.3
+              save_as: "top3"
+              on_error:
+                - reply: { template: "catalog_error" }
+                - transition: "FALLBACK_MANUAL_INPUT"
+        
+        # Apresentar opções baseado na quantidade encontrada
+        - if: "{{top3.length == 0}}"
+          then:
+            - reply: { template: "no_options" }
+            - transition: "FALLBACK_MANUAL_INPUT"
+          elif: "{{top3.length == 1}}"
+          then:
+            - reply: { template: "single_option" }
+            - transition: "CATALOG_WAIT_CONFIRMATION"
+          elif: "{{top3.length == 2}}"
+          then:
+            - reply: { template: "top2_prompt" }
+            - transition: "CATALOG_WAIT_CHOICE"
+          else:
+            - reply: { template: "top3_prompt" }
+            - transition: "CATALOG_WAIT_CHOICE"
+    
+    # Aguarda escolha numérica (1-3)
+    CATALOG_WAIT_CHOICE:
+      description: "Aguarda seleção numérica do usuário"
+      
+      on_user_message:
+        - if: "{{nlp.match(patterns.numeric_1_3, input.text)}}"
+          then:
+            # Processar escolha válida
+            - set:
+                idx: "{{to_int(trim(input.text)) - 1}}"
+            
+            # Verificar se índice é válido
+            - if: "{{idx < top3.length}}"
+              then:
+                - set:
+                    choice: "{{top3[idx]}}"
+                
+                # Persistir seleção nos slots
+                - set_slots:
+                    service_id: "{{choice.servicoid}}"
+                    service_name: "{{choice.nomeservico}}"
+                    service_norm: "{{choice.nomeservico_normalizado}}"
+                    professional_id: "{{choice.profissionalid}}"
+                    service_price: "{{choice.preco}}"
+                    service_duration: "{{choice.duracao}}"
+                    category: "{{choice.categoria}}"
+                
+                # Confirmar seleção
+                - reply: { template: "persisted_ok" }
+                
+                # Registrar métrica
+                - metric:
+                    name: "catalog_numeric_choices_total"
+                    labels: { index: "{{idx + 1}}" }
+                    increment: 1
+                
+                # Retornar ao fluxo principal
+                - transition: "RETURN_TO_FLOW"
+              else:
+                - reply: { template: "invalid_choice" }
+                - stay: true
+          else:
+            # Escolha inválida
+            - reply: { template: "invalid_choice" }
+            - stay: true
+    
+    # Aguarda confirmação para opção única
+    CATALOG_WAIT_CONFIRMATION:
+      description: "Aguarda confirmação sim/não para opção única"
+      
+      on_user_message:
+        - if: "{{nlp.match(patterns.affirmative, input.text)}}"
+          then:
+            # Confirmar opção única
+            - set:
+                choice: "{{top3[0]}}"
+            
+            # Persistir seleção nos slots
+            - set_slots:
+                service_id: "{{choice.servicoid}}"
+                service_name: "{{choice.nomeservico}}"
+                service_norm: "{{choice.nomeservico_normalizado}}"
+                professional_id: "{{choice.profissionalid}}"
+                service_price: "{{choice.preco}}"
+                service_duration: "{{choice.duracao}}"
+                category: "{{choice.categoria}}"
+            
+            # Confirmar seleção
+            - reply: { template: "persisted_ok" }
+            
+            # Retornar ao fluxo principal
+            - transition: "RETURN_TO_FLOW"
+          
+          elif: "{{nlp.match(patterns.negative, input.text)}}"
+          then:
+            # Rejeitar e pedir entrada manual
+            - reply: { template: "no_options" }
+            - transition: "FALLBACK_MANUAL_INPUT"
+          
+          else:
+            # Resposta inválida
+            - reply:
+                text: "Por favor, responda **sim** para confirmar ou **não** para escolher outro serviço."
+            - stay: true
+    
+    # Fallback para entrada manual
+    FALLBACK_MANUAL_INPUT:
+      description: "Coleta entrada manual quando catálogo falha"
+      
+      on_enter:
+        - reply:
+            text: |
+              📝 Me diga exatamente qual serviço você gostaria de agendar.
+              
+              Exemplo: "Corte de cabelo masculino" ou "Manicure e pedicure"
+      
+      on_user_message:
+        # Aceitar qualquer entrada como serviço manual
+        - set_slots:
+            service_name: "{{trim(input.text)}}"
+            service_norm: "{{normalize_servico_nome(input.text)}}"
+            manual_service: true
+        
+        - reply:
+            text: "✅ Anotei **{{slots.service_name}}**. Vamos encontrar um horário!"
+        
+        - transition: "RETURN_TO_FLOW"
+    
+    # Estado de retorno ao fluxo principal
+    RETURN_TO_FLOW:
+      description: "Retorna ao estado anterior da máquina principal"
+      
+      on_enter:
+        # Determinar próximo estado baseado no contexto
+        - if: "{{context.return_state}}"
+          then:
+            - transition: "{{context.return_state}}"
+          else:
+            # Padrão: ir para validação de disponibilidade
+            - transition: "VALIDATE_BEFORE_CONFIRM"
+
+# -----------------------------------------------------------------------------
+# CONFIGURAÇÕES DE UX
+# -----------------------------------------------------------------------------
+
+ux:
+  lists:
+    numbered_short: true
+    accept_numeric_only: [1, 2, 3]
+    max_options: 3
+    show_price: true
+    show_duration: true
+    currency_symbol: "R$"
+  
+  persistence:
+    slots_to_keep:
+      - service_id
+      - service_name
+      - service_norm
+      - professional_id
+      - service_price
+      - service_duration
+      - category
+      - manual_service
+    
+    reuse_on_next_turn: true
+    clear_on_new_session: false
+  
+  fallbacks:
+    max_disambiguation_attempts: 2
+    fallback_to_manual: true
+    preserve_original_input: true
+
+# -----------------------------------------------------------------------------
+# MÉTRICAS E OBSERVABILIDADE
+# -----------------------------------------------------------------------------
+
+observability:
+  prometheus:
+    http_endpoint: "/metrics"
+    labels:
+      app: "marlie"
+      component: "catalog-disambiguation"
+    
+    counters:
+      - name: "catalog_sync_upserts_total"
+        help: "Registros upsertados no catálogo"
+        labels: ["source"]
+      
+      - name: "catalog_sync_duplicates_avoided_total"
+        help: "Conflitos ON CONFLICT evitados (idempotência)"
+      
+      - name: "catalog_disambig_prompts_total"
+        help: "Quantas vezes a lista top-3 foi apresentada"
+        labels: ["category", "options_count"]
+      
+      - name: "catalog_numeric_choices_total"
+        help: "Respostas 1–3 recebidas"
+        labels: ["index"]
+      
+      - name: "catalog_choice_persisted_total"
+        help: "Seleções persistidas em slots"
+        labels: ["source"]  # "catalog" ou "manual"
+      
+      - name: "catalog_fallback_manual_total"
+        help: "Vezes que fallback manual foi usado"
+        labels: ["reason"]  # "no_options", "error", "user_rejection"
+    
+    gauges:
+      - name: "catalog_last_watermark_seconds"
+        help: "Segundos desde último watermark processado"
+      
+      - name: "catalog_available_services_count"
+        help: "Número total de serviços disponíveis no catálogo"
+    
+    summaries:
+      - name: "catalog_search_match_ratio"
+        help: "Razão (0–1) de top-N local vs interface humana"
+      
+      - name: "catalog_disambiguation_duration_seconds"
+        help: "Tempo gasto no processo de desambiguação"
+  
+  goals:
+    - name: "daily_diff_zero"
+      description: "Diff diário vazio (sem fantasmas/duplicatas)"
+      target: "< 1% discrepancy"
+    
+    - name: "topn_parity"
+      description: "Busca por termo retorna o mesmo top-N da interface humana"
+      target: "> 90% match ratio"
+    
+    - name: "clarification_efficiency"
+      description: "< 5% de idas-e-voltas para clarificar serviço em 100 conversas"
+      target: "< 5% fallback rate"
+    
+    - name: "user_satisfaction"
+      description: "Usuários encontram serviço desejado rapidamente"
+      target: "< 2 turnos médios para seleção"
+
+# -----------------------------------------------------------------------------
+# TESTES DE ACEITAÇÃO
+# -----------------------------------------------------------------------------
+
+acceptance_tests:
+  - name: "sync_idempotent"
+    description: "Sincronização deve ser idempotente"
+    arrange:
+      watermark: "2025-01-01T00:00:00Z"
+      pages: 3
+    assert:
+      counters_change:
+        catalog_sync_upserts_total: "> 0"
+        catalog_sync_duplicates_avoided_total: ">= 0"
+  
+  - name: "daily_diff_empty"
+    description: "Relatório diário deve estar vazio em condições normais"
+    arrange:
+      as_of_date: "2025-09-04"
+    assert:
+      diff_report: "no_diffs"
+  
+  - name: "disambig_top3_offers_numeric"
+    description: "Entrada ambígua deve apresentar opções numeradas"
+    input: "cabelo"
+    expect_reply_contains: ["1️⃣", "2️⃣", "3️⃣"]
+    expect_state: "CATALOG_WAIT_CHOICE"
+  
+  - name: "numeric_choice_persists"
+    description: "Escolha numérica deve persistir nos slots"
+    input_sequence: ["cabelo", "2"]
+    assert_slots:
+      service_id: "not_null"
+      service_name: "not_empty"
+      service_norm: "not_empty"
+    expect_reply_contains: ["Perfeito! Anotei"]
+  
+  - name: "single_option_confirmation"
+    description: "Opção única deve pedir confirmação"
+    input: "design de sobrancelha"
+    expect_reply_contains: ["Confirma este serviço?"]
+    expect_state: "CATALOG_WAIT_CONFIRMATION"
+  
+  - name: "no_options_fallback"
+    description: "Sem opções deve ativar fallback manual"
+    input: "serviço inexistente xyz"
+    expect_reply_contains: ["Não encontrei opções"]
+    expect_state: "FALLBACK_MANUAL_INPUT"
+  
+  - name: "invalid_choice_retry"
+    description: "Escolha inválida deve permitir nova tentativa"
+    input_sequence: ["cabelo", "5"]
+    expect_reply_contains: ["Não entendi sua escolha"]
+    expect_state: "CATALOG_WAIT_CHOICE"
+  
+  - name: "fallback_manual_accepts_any"
+    description: "Fallback manual deve aceitar qualquer entrada"
+    input_sequence: ["xyz", "Corte masculino degradê"]
+    assert_slots:
+      service_name: "Corte masculino degradê"
+      manual_service: true
+    expect_reply_contains: ["Anotei"]
+
+# -----------------------------------------------------------------------------
+# CONFIGURAÇÕES DE INTEGRAÇÃO
+# -----------------------------------------------------------------------------
+
+integration:
+  # Integração com máquina de estados principal
+  state_machine:
+    entry_points:
+      - from_state: "VALIDATE_BEFORE_CONFIRM"
+        condition: "{{nlp.match(patterns.category_ambiguous, input.text)}}"
+        target_state: "CATALOG_DISAMBIGUATION"
+      
+      - from_state: "COLLECT_SERVICE"
+        condition: "{{nlp.match(patterns.category_ambiguous, slots.service_name)}}"
+        target_state: "CATALOG_DISAMBIGUATION"
+    
+    return_points:
+      - to_state: "VALIDATE_BEFORE_CONFIRM"
+        condition: "{{slots.service_id != null}}"
+      
+      - to_state: "COLLECT_SERVICE"
+        condition: "{{slots.manual_service == true}}"
+  
+  # Integração com catálogo
+  catalog:
+    required_tables:
+      - "servicos_prof"
+      - "sync_watermarks"
+    
+    required_functions:
+      - "normalize_servico_nome"
+      - "topn_by_category_30d"
+      - "search_like"
+    
+    cache_strategy:
+      enabled: true
+      ttl_seconds: 300  # 5 minutos
+      key_prefix: "disambig:"
+
+# -----------------------------------------------------------------------------
+# NOTAS DE IMPLEMENTAÇÃO
+# -----------------------------------------------------------------------------
+
+notes:
+  implementation:
+    - "Normalize e índices conforme README; garanta ON CONFLICT (profissionalid,servicoid)."
+    - "Popularidade de 30d pode vir de contagem de agendamentos (Trinks) ou tabela local de bookings."
+    - "Se preço/duração inexistentes, exiba '—' ou omita com fallback elegante."
+    - "Implementar cache Redis para consultas frequentes de top-N."
+    - "Logs estruturados para debugging e métricas de performance."
+  
+  performance:
+    - "Índices GIN para busca textual eficiente."
+    - "Cache de resultados para categorias populares."
+    - "Timeout de 5s para consultas ao catálogo."
+    - "Fallback graceful em caso de erro de BD/Redis."
+  
+  ux:
+    - "Máximo 3 opções para não sobrecarregar usuário."
+    - "Emojis e formatação para melhor legibilidade."
+    - "Confirmação clara da seleção antes de prosseguir."
+    - "Fallback manual sempre disponível."
+  
+  monitoring:
+    - "Métricas Prometheus para observabilidade."
+    - "Alertas para taxa de fallback > 10%."
+    - "Dashboard para acompanhar eficácia da desambiguação."
+    - "Logs de auditoria para análise de padrões de uso."

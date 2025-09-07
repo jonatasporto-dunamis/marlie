@@ -66,56 +66,44 @@ export class ResponseTemplateService {
       {
         id: 'menu_welcome',
         name: 'Menu de Boas-vindas',
-        content: `Olá, {{user.first_name}}! Sou a Marliê 🌸.
-Como posso ajudar hoje?
-
-1) Agendar atendimento
-2) Informações
-
-Responda com **1** ou **2**.`,
+        content: `Olá{{#if user.first_name}}, {{user.first_name}}{{/if}}! 👋\n\nEu sou a Marlie, assistente virtual da nossa clínica. Como posso ajudar você hoje?\n\n*1* - 📅 Agendar consulta\n*2* - ℹ️ Informações e dúvidas\n\nDigite *1* ou *2* para escolher uma opção.`,
         variables: ['user.first_name'],
         category: 'menu',
         priority: 1,
         active: true
       },
       {
-        id: 'confirm_intent',
-        name: 'Confirmação de Intenção',
-        content: `Só para confirmar: você quer **Agendar (1)** ou **Informações (2)**?
-Por favor, responda com **1** ou **2**.`,
-        variables: [],
-        category: 'menu',
-        priority: 2,
-        active: true
-      },
-      {
-        id: 'invalid_option',
-        name: 'Opção Inválida',
-        content: `Não entendi. Para continuar, responda **1** para Agendar ou **2** para Informações.`,
-        variables: [],
-        category: 'error',
-        priority: 1,
-        active: true
-      },
-      {
         id: 'human_handoff_active',
         name: 'Handoff Humano Ativo',
-        content: `Atendimento humano ativo. 👩‍💼 Aguarde, por favor.`,
+        content: `Você está sendo atendido por nossa equipe humana. Aguarde que alguém responderá em breve! 👥\n\nSe precisar de atendimento urgente, ligue para nosso telefone.`,
         variables: [],
         category: 'handoff',
         priority: 1,
         active: true
       },
       {
+        id: 'confirm_intent',
+        name: 'Confirmação de Intenção',
+        content: `Entendi que você quer informações sobre agendamento. Para prosseguir, preciso que escolha uma opção específica:\n\n*1* - 📅 Agendar consulta\n*2* - ℹ️ Informações gerais\n\nPor favor, digite *1* ou *2*.`,
+        variables: [],
+        category: 'confirmation',
+        priority: 1,
+        active: true
+      },
+      {
+        id: 'invalid_option',
+        name: 'Opção Inválida',
+        content: `Desculpe, não entendi sua escolha. 🤔\n\nPor favor, digite:\n*1* - Para agendar consulta\n*2* - Para informações\n\nApenas os números *1* ou *2*.`,
+        variables: [],
+        category: 'error',
+        priority: 1,
+        active: true
+      },
+      {
         id: 'clarify_service',
-        name: 'Clarificar Serviço',
-        content: `Antes de confirmar, preciso entender melhor o serviço.
-Você quis dizer algum destes? Responda com o número:
-
-1) {{top3.0.nome}} — {{top3.0.duracao}}min — {{top3.0.preco}}
-2) {{top3.1.nome}} — {{top3.1.duracao}}min — {{top3.1.preco}}
-3) {{top3.2.nome}} — {{top3.2.duracao}}min — {{top3.2.preco}}`,
-        variables: ['top3.0.nome', 'top3.0.duracao', 'top3.0.preco', 'top3.1.nome', 'top3.1.duracao', 'top3.1.preco', 'top3.2.nome', 'top3.2.duracao', 'top3.2.preco'],
+        name: 'Esclarecimento de Serviço',
+        content: `Antes de confirmar, preciso entender melhor qual serviço você deseja. Aqui estão nossas principais opções:\n\n{{#each top3}}{{@index}}. *{{nome}}* - {{categoria}}\n   ⏱️ {{duracao}}min | 💰 {{preco}}\n\n{{/each}}Digite o número da opção desejada (1, 2 ou 3).`,
+        variables: ['top3'],
         category: 'confirmation',
         priority: 1,
         active: true
@@ -123,8 +111,7 @@ Você quis dizer algum destes? Responda com o número:
       {
         id: 'validation_failed',
         name: 'Validação Falhou',
-        content: `Não posso confirmar ainda porque identifiquei a opção como **categoria** ou **ambígua**.
-Selecione uma das opções listadas para seguir.`,
+        content: `Não foi possível validar sua solicitação de agendamento. 😔\n\nIsso pode acontecer se:\n• O serviço não está disponível\n• O horário está ocupado\n• Faltam informações\n\nVamos tentar novamente com outras opções.`,
         variables: [],
         category: 'error',
         priority: 1,
@@ -144,6 +131,15 @@ Selecione uma das opções listadas para seguir.`,
 Obrigada, {{user.first_name}}! Até breve! 🌸`,
         variables: ['service.nome', 'professional.nome', 'appointment.datetime_formatted', 'service.duracao', 'service.preco', 'user.first_name'],
         category: 'confirmation',
+        priority: 1,
+        active: true
+      },
+      {
+        id: 'info_response',
+        name: 'Resposta de Informações',
+        content: `Aqui estão algumas informações úteis:\n\n🕒 *Horário de funcionamento:*\nSegunda a Sexta: 8h às 18h\nSábado: 8h às 12h\n\n📍 *Localização:*\nRua Example, 123 - Centro\n\n📞 *Contato:*\n(11) 9999-9999\n\nPrecisa de mais alguma informação?`,
+        variables: [],
+        category: 'info',
         priority: 1,
         active: true
       },
@@ -440,7 +436,7 @@ Responda **1** para ver horários ou **2** para escolher outro serviço.`,
     // Reset regex lastIndex
     this.VARIABLE_PATTERN.lastIndex = 0;
     
-    return [...new Set(variables)];
+    return Array.from(new Set(variables));
   }
 
   /**

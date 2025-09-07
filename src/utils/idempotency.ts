@@ -82,7 +82,7 @@ export async function checkIdempotency(
       return { exists: false, inProgress: false };
     }
     
-    const data = JSON.parse(value);
+    const data = typeof value === 'string' ? JSON.parse(value) : value;
     
     return {
       exists: true,
@@ -318,7 +318,7 @@ export class IdempotencyManager {
       const value = await redis.get(key);
       if (!value) return 'not_found';
       
-      const data = JSON.parse(value);
+      const data = typeof value === 'string' ? JSON.parse(value) : value;
       return data.status || 'completed';
     } catch {
       return 'completed';
@@ -351,7 +351,7 @@ export class IdempotencyManager {
         try {
           const value = await redis.get(key);
           if (value) {
-            const data = JSON.parse(value);
+            const data = typeof value === 'string' ? JSON.parse(value) : value;
             if (data.status === 'in_progress') {
               inProgressCount++;
             }

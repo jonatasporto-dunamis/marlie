@@ -76,10 +76,20 @@ function validateWebhookToken(token: string): boolean {
 }
 
 /**
- * Middleware de autenticação para endpoints admin
+ * Middleware de autenticação para endpoints admin (suporta X-Admin-Token e Bearer)
  */
 export function adminAuth(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
-  const token = extractToken(req, 'x-admin-token');
+  // Tentar X-Admin-Token primeiro
+  let token = extractToken(req, 'x-admin-token');
+  
+  // Se não encontrou, tentar Bearer token
+  if (!token) {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7); // Remove 'Bearer '
+    }
+  }
+  
   const tenantId = getCurrentTenantId(req) || 'default';
   
   if (!token) {
@@ -91,11 +101,12 @@ export function adminAuth(req: AuthenticatedRequest, res: Response, next: NextFu
       method: req.method
     });
     
-    return res.status(401).json({
+    res.status(401).json({
       error: 'Unauthorized',
-      message: 'Admin token required',
+      message: 'Admin token required (X-Admin-Token header or Bearer authorization)',
       code: 'MISSING_ADMIN_TOKEN'
     });
+    return;
   }
   
   if (!validateAdminToken(token)) {
@@ -108,11 +119,12 @@ export function adminAuth(req: AuthenticatedRequest, res: Response, next: NextFu
       tokenLength: token.length
     });
     
-    return res.status(401).json({
+    res.status(401).json({
       error: 'Unauthorized',
       message: 'Invalid admin token',
       code: 'INVALID_ADMIN_TOKEN'
     });
+    return;
   }
   
   // Marcar requisição como autenticada
@@ -145,11 +157,12 @@ export function webhookAuth(req: AuthenticatedRequest, res: Response, next: Next
       method: req.method
     });
     
-    return res.status(401).json({
+    res.status(401).json({
       error: 'Unauthorized',
       message: 'Webhook token required',
       code: 'MISSING_WEBHOOK_TOKEN'
     });
+    return;
   }
   
   if (!validateWebhookToken(token)) {
@@ -162,11 +175,12 @@ export function webhookAuth(req: AuthenticatedRequest, res: Response, next: Next
       tokenLength: token.length
     });
     
-    return res.status(401).json({
+    res.status(401).json({
       error: 'Unauthorized',
       message: 'Invalid webhook token',
       code: 'INVALID_WEBHOOK_TOKEN'
     });
+    return;
   }
   
   // Marcar requisição como autenticada
@@ -232,11 +246,12 @@ export function flexibleAuth(req: AuthenticatedRequest, res: Response, next: Nex
     hasWebhookToken: !!webhookToken
   });
   
-  return res.status(401).json({
+  res.status(401).json({
     error: 'Unauthorized',
     message: 'Valid admin or webhook token required',
     code: 'AUTHENTICATION_REQUIRED'
   });
+  return;
 }
 
 /**
@@ -254,11 +269,12 @@ export function requireAdminToken(req: AuthenticatedRequest, res: Response, next
       tokenType: req.tokenType
     });
     
-    return res.status(403).json({
+    res.status(403).json({
       error: 'Forbidden',
       message: 'Admin token required for this operation',
       code: 'ADMIN_TOKEN_REQUIRED'
     });
+    return;
   }
   
   next();
@@ -279,11 +295,12 @@ export function requireWebhookToken(req: AuthenticatedRequest, res: Response, ne
       tokenType: req.tokenType
     });
     
-    return res.status(403).json({
+    res.status(403).json({
       error: 'Forbidden',
       message: 'Webhook token required for this operation',
       code: 'WEBHOOK_TOKEN_REQUIRED'
     });
+    return;
   }
   
   next();
@@ -310,11 +327,12 @@ export function validateTokenConfiguration(req: Request, res: Response, next: Ne
   if (errors.length > 0) {
     logger.error('Token configuration validation failed', { errors });
     
-    return res.status(500).json({
+    res.status(500).json({
       error: 'Server configuration error',
       message: 'Authentication tokens not properly configured',
       code: 'TOKEN_CONFIG_ERROR'
     });
+    return;
   }
   
   next();

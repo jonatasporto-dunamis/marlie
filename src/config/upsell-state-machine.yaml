@@ -1,0 +1,502 @@
+# Configuração da Máquina de Estados para Upsell
+# 
+# Define os estados, transições e ações para o fluxo de upsell
+# Integra com o módulo marlie-upsell para ofertas estratégicas
+
+name: "marlie-upsell-state-machine"
+version: "1.0.0"
+description: "Máquina de estados para processamento de upsells pós-agendamento"
+
+# =============================================================================
+# CONFIGURAÇÕES GLOBAIS
+# =============================================================================
+
+config:
+  timezone: "America/Bahia"
+  default_timeout: 300  # 5 minutos
+  max_retries: 3
+  enable_metrics: true
+  enable_logging: true
+  
+  # Configurações de A/B Testing
+  ab_testing:
+    copy_variants:
+      A:
+        weight: 0.5
+        template: "copy_A"
+      B:
+        weight: 0.5
+        template: "copy_B"
+    
+    position_variants:
+      IMMEDIATE:
+        weight: 0.5
+        delay_seconds: 0
+      DELAY10:
+        weight: 0.5
+        delay_seconds: 600  # 10 minutos
+
+  # Padrões NLP para detecção de respostas
+  nlp_patterns:
+    accept_numeric_1:
+      - "^\\s*1\\s*$"
+    accept_words:
+      - "(?i)\\b(sim|quero|aceito|adicionar|pode sim|ok|beleza)\\b"
+    decline_words:
+      - "(?i)\\b(nao|não|talvez depois|agora não|não quero|dispenso)\\b"
+
+# =============================================================================
+# TEMPLATES DE MENSAGENS
+# =============================================================================
+
+templates:
+  copy_A: |
+    Dica rápida: **{{addon.nome}}** ({{addon.duracao}}min) por **{{addon.preco}}**. 
+    Quer adicionar ao seu atendimento? Responda **1**.
+  
+  copy_B: |
+    Potencialize seu resultado: **{{addon.nome}}** ({{addon.duracao}}min). 
+    Valor **{{addon.preco}}**. Deseja incluir? Responda **1**.
+  
+  confirm_added: |
+    Perfeito! Adicionei **{{addon.nome}}** ao seu atendimento. ✅
+  
+  added_pending: |
+    Certo! Vou ajustar sua agenda com **{{addon.nome}}** e te confirmo já. 😉
+  
+  declined: |
+    Tudo bem! Seguimos com o que já foi confirmado. 🙌
+  
+  nothing_to_offer: " "
+  already_offered: " "
+  
+  timeout_message: |
+    Tudo bem! Vamos seguir com seu agendamento original. 😊
+
+# =============================================================================
+# DEFINIÇÃO DOS ESTADOS
+# =============================================================================
+
+states:
+  # Estado inicial - não é um estado real, apenas referência
+  INITIAL:
+    description: "Estado inicial antes do upsell"
+    type: "virtual"
+  
+  # Estado de espera por resposta do usuário
+  UPSELL_WAIT:
+    description: "Aguardando resposta do usuário sobre o upsell"
+    type: "interactive"
+    timeout: 300  # 5 minutos
+    
+    on_enter:
+      - action: "log_event"
+        params:
+          event: "upsell_wait_entered"
+          conversation_id: "{{context.conversation_id}}"
+          addon_id: "{{addon.id}}"
+      
+      - action: "increment_metric"
+        params:
+          name: "upsell_wait_sessions_total"
+          labels:
+            variant: "{{variant_copy}}-{{variant_pos}}"
+    
+    on_timeout:
+      - action: "log_event"
+        params:
+          event: "timeout"
+          conversation_id: "{{context.conversation_id}}"
+          addon_id: "{{addon.id}}"
+      
+      - action: "send_message"
+        params:
+          template: "timeout_message"
+      
+      - transition: "UPSELL_END"
+    
+    on_user_message:
+      # Aceite numérico (1)
+      - condition: "{{nlp.match(patterns.accept_numeric_1, input.text)}}"
+        actions:
+          - action: "call_tool"
+            tool: "trinks.append_service"
+            params:
+              appointment_id: "{{context.appointment.id}}"
+              service_id: "{{addon.id}}"
+            save_as: "append_result"
+          
+          - condition: "{{append_result.ok}}"
+            actions:
+              - action: "send_message"
+                params:
+                  template: "confirm_added"
+              
+              - action: "log_event"
+                params:
+                  event: "accepted"
+                  conversation_id: "{{context.conversation_id}}"
+                  phone: "{{user.phone}}"
+                  addon_id: "{{addon.id}}"
+                  addon_name: "{{addon.nome}}"
+                  variant_copy: "{{variant_copy}}"
+                  variant_pos: "{{variant_pos}}"
+                  price_brl: "{{addon.preco_num}}"
+                  addon_added: true
+              
+              - action: "increment_metric"
+                params:
+                  name: "upsell_accepted_total"
+                  labels:
+                    service: "{{addon.nome}}"
+                    variant: "{{variant_copy}}-{{variant_pos}}"
+              
+              - action: "increment_metric"
+                params:
+                  name: "upsell_revenue_brl_total"
+                  value: "{{addon.preco_num}}"
+                  labels:
+                    service: "{{addon.nome}}"
+              
+              - transition: "UPSELL_END"
+            
+            else:
+              - action: "send_message"
+                params:
+                  template: "added_pending"
+              
+              - action: "log_event"
+                params:
+                  event: "accepted_pending"
+                  conversation_id: "{{context.conversation_id}}"
+                  phone: "{{user.phone}}"
+                  addon_id: "{{addon.id}}"
+                  addon_name: "{{addon.nome}}"
+                  variant_copy: "{{variant_copy}}"
+                  variant_pos: "{{variant_pos}}"
+                  price_brl: "{{addon.preco_num}}"
+                  addon_added: false
+              
+              - transition: "UPSELL_END"
+      
+      # Aceite por palavras
+      - condition: "{{nlp.match(patterns.accept_words, input.text)}}"
+        actions:
+          - action: "call_tool"
+            tool: "trinks.append_service"
+            params:
+              appointment_id: "{{context.appointment.id}}"
+              service_id: "{{addon.id}}"
+            save_as: "append_result"
+          
+          - condition: "{{append_result.ok}}"
+            actions:
+              - action: "send_message"
+                params:
+                  template: "confirm_added"
+              
+              - action: "log_event"
+                params:
+                  event: "accepted"
+                  conversation_id: "{{context.conversation_id}}"
+                  phone: "{{user.phone}}"
+                  addon_id: "{{addon.id}}"
+                  addon_name: "{{addon.nome}}"
+                  variant_copy: "{{variant_copy}}"
+                  variant_pos: "{{variant_pos}}"
+                  price_brl: "{{addon.preco_num}}"
+                  addon_added: true
+              
+              - action: "increment_metric"
+                params:
+                  name: "upsell_accepted_total"
+                  labels:
+                    service: "{{addon.nome}}"
+                    variant: "{{variant_copy}}-{{variant_pos}}"
+              
+              - action: "increment_metric"
+                params:
+                  name: "upsell_revenue_brl_total"
+                  value: "{{addon.preco_num}}"
+                  labels:
+                    service: "{{addon.nome}}"
+              
+              - transition: "UPSELL_END"
+            
+            else:
+              - action: "send_message"
+                params:
+                  template: "added_pending"
+              
+              - action: "log_event"
+                params:
+                  event: "accepted_pending"
+                  conversation_id: "{{context.conversation_id}}"
+                  phone: "{{user.phone}}"
+                  addon_id: "{{addon.id}}"
+                  addon_name: "{{addon.nome}}"
+                  variant_copy: "{{variant_copy}}"
+                  variant_pos: "{{variant_pos}}"
+                  price_brl: "{{addon.preco_num}}"
+                  addon_added: false
+              
+              - transition: "UPSELL_END"
+      
+      # Recusa por palavras
+      - condition: "{{nlp.match(patterns.decline_words, input.text)}}"
+        actions:
+          - action: "send_message"
+            params:
+              template: "declined"
+          
+          - action: "log_event"
+            params:
+              event: "declined"
+              conversation_id: "{{context.conversation_id}}"
+              phone: "{{user.phone}}"
+              addon_id: "{{addon.id}}"
+              addon_name: "{{addon.nome}}"
+              variant_copy: "{{variant_copy}}"
+              variant_pos: "{{variant_pos}}"
+              price_brl: "{{addon.preco_num}}"
+          
+          - action: "increment_metric"
+            params:
+              name: "upsell_declined_total"
+              labels:
+                service: "{{addon.nome}}"
+                variant: "{{variant_copy}}-{{variant_pos}}"
+          
+          - transition: "UPSELL_END"
+      
+      # Mensagem não relacionada - permanecer no estado
+      - default:
+          actions:
+            - action: "log_event"
+              params:
+                event: "unrelated_message"
+                conversation_id: "{{context.conversation_id}}"
+                message: "{{input.text}}"
+            
+            - stay: true
+  
+  # Estado final do upsell
+  UPSELL_END:
+    description: "Finalização do fluxo de upsell"
+    type: "final"
+    
+    on_enter:
+      - action: "log_event"
+        params:
+          event: "upsell_completed"
+          conversation_id: "{{context.conversation_id}}"
+          addon_id: "{{addon.id}}"
+      
+      - action: "decrement_metric"
+        params:
+          name: "upsell_active_sessions"
+      
+      - action: "set_context"
+        params:
+          upsell_completed: true
+          upsell_timestamp: "{{now()}}"
+      
+      - done: true
+
+# =============================================================================
+# TRANSIÇÕES GLOBAIS
+# =============================================================================
+
+global_transitions:
+  # Transição de emergência para sair do fluxo
+  - trigger: "emergency_exit"
+    from_any_state: true
+    to_state: "UPSELL_END"
+    actions:
+      - action: "log_event"
+        params:
+          event: "emergency_exit"
+          conversation_id: "{{context.conversation_id}}"
+  
+  # Transição por timeout global
+  - trigger: "global_timeout"
+    from_any_state: true
+    to_state: "UPSELL_END"
+    actions:
+      - action: "log_event"
+        params:
+          event: "global_timeout"
+          conversation_id: "{{context.conversation_id}}"
+
+# =============================================================================
+# FERRAMENTAS DISPONÍVEIS
+# =============================================================================
+
+tools:
+  - name: "catalog.recommended_addon"
+    description: "Sugere 1 addon relevante dado o serviço principal"
+    input_schema:
+      type: "object"
+      properties:
+        primary_service_id:
+          type: "string"
+      required: ["primary_service_id"]
+  
+  - name: "trinks.append_service"
+    description: "Adiciona serviço ao agendamento existente"
+    input_schema:
+      type: "object"
+      properties:
+        appointment_id:
+          type: "string"
+        service_id:
+          type: "string"
+      required: ["appointment_id", "service_id"]
+  
+  - name: "whatsapp.send_message"
+    description: "Envia mensagem via WhatsApp"
+    input_schema:
+      type: "object"
+      properties:
+        phone:
+          type: "string"
+        message:
+          type: "string"
+      required: ["phone", "message"]
+  
+  - name: "db.log_upsell_event"
+    description: "Registra evento de upsell no banco"
+    input_schema:
+      type: "object"
+      properties:
+        conversation_id:
+          type: "string"
+        phone:
+          type: "string"
+        event:
+          type: "string"
+        addon_id:
+          type: "string"
+        addon_name:
+          type: "string"
+        variant_copy:
+          type: "string"
+        variant_pos:
+          type: "string"
+        price_brl:
+          type: "number"
+        addon_added:
+          type: "boolean"
+      required: ["conversation_id", "phone", "event"]
+
+# =============================================================================
+# OBSERVABILIDADE
+# =============================================================================
+
+observability:
+  prometheus:
+    http_endpoint: "/metrics"
+    labels:
+      app: "marlie"
+      component: "upsell"
+      version: "1.0.0"
+    
+    counters:
+      - name: "upsell_shown_total"
+        help: "Total de upsells exibidos"
+        labels: ["service", "variant"]
+      
+      - name: "upsell_accepted_total"
+        help: "Total de upsells aceitos"
+        labels: ["service", "variant"]
+      
+      - name: "upsell_declined_total"
+        help: "Total de upsells recusados"
+        labels: ["service", "variant"]
+      
+      - name: "upsell_revenue_brl_total"
+        help: "Receita total de upsells em BRL"
+        labels: ["service"]
+      
+      - name: "upsell_timeout_total"
+        help: "Total de timeouts em upsells"
+        labels: ["variant"]
+    
+    gauges:
+      - name: "upsell_active_sessions"
+        help: "Número de sessões ativas de upsell"
+      
+      - name: "upsell_wait_sessions_total"
+        help: "Sessões aguardando resposta"
+        labels: ["variant"]
+    
+    histograms:
+      - name: "upsell_processing_duration_seconds"
+        help: "Duração do processamento de upsell"
+        labels: ["result_type", "variant"]
+        buckets: [0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+    
+    record_hooks:
+      - on_event: "shown"
+        increment_counter:
+          name: "upsell_shown_total"
+          labels:
+            service: "{{addon.nome}}"
+            variant: "{{variant_copy}}-{{variant_pos}}"
+      
+      - on_event: "accepted"
+        increment_counter:
+          name: "upsell_revenue_brl_total"
+          value: "{{addon.preco_num}}"
+          labels:
+            service: "{{addon.nome}}"
+      
+      - on_event: "timeout"
+        increment_counter:
+          name: "upsell_timeout_total"
+          labels:
+            variant: "{{variant_copy}}-{{variant_pos}}"
+
+# =============================================================================
+# CRITÉRIOS DE ACEITAÇÃO
+# =============================================================================
+
+acceptance_criteria:
+  - description: "1 oferta por conversa (dedupe por conversation_id)"
+    validation: "deduplication_check"
+    required: true
+  
+  - description: "A/B de copy (A|B) e posição (imediata|+10min) ativo"
+    validation: "ab_testing_active"
+    required: true
+  
+  - description: "Métricas de exibição, aceite e receita reportadas"
+    validation: "metrics_reporting"
+    required: true
+  
+  - description: "Taxa de aceite ≥5% em 14 dias (meta inicial)"
+    validation: "conversion_rate_target"
+    target_value: 5.0
+    measurement_period: "14d"
+    required: true
+
+# =============================================================================
+# CONFIGURAÇÕES DE AMBIENTE
+# =============================================================================
+
+environment:
+  development:
+    enable_debug_logs: true
+    mock_external_apis: true
+    reduced_timeouts: true
+  
+  staging:
+    enable_debug_logs: true
+    mock_external_apis: false
+    reduced_timeouts: false
+  
+  production:
+    enable_debug_logs: false
+    mock_external_apis: false
+    reduced_timeouts: false
+    enable_performance_monitoring: true

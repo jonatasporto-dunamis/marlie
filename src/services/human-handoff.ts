@@ -164,7 +164,7 @@ export class HumanHandoffService {
       const handoffData = await this.redis.get(redisKey);
       
       if (handoffData) {
-        const status: HandoffStatus = JSON.parse(handoffData);
+        const status: HandoffStatus = JSON.parse(handoffData as string);
         
         // Check if expired
         if (status.expiresAt && new Date() > new Date(status.expiresAt)) {

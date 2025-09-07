@@ -1,0 +1,182 @@
+# Configuração da Máquina de Estados - Marlie Router
+# Baseado na especificação P0 para controle determinístico de fluxo
+
+state_machine:
+  initial_state: "START"
+  
+  states:
+    START:
+      on_enter:
+        - check_override: { var: "HUMAN_OVERRIDE", for: "{{user.phone}}" }
+        - if: "{{HUMAN_OVERRIDE == true}}"
+          then:
+            - reply: { template: "human_handoff_active" }
+            - transition: "HUMAN_HANDOFF"
+          else:
+            - reply: { template: "menu_welcome" }
+            - transition: "MENU_WAITING"
+    
+    HUMAN_HANDOFF:
+      description: "Pausa completa do bot enquanto HUMAN_OVERRIDE=true."
+      on_user_message:
+        - reply: { template: "human_handoff_active" }
+        - stay: true
+    
+    MENU_WAITING:
+      description: "Aguarda escolha 1/2; usa buffer de 30s para agrupar mensagens."
+      on_user_message:
+        - aggregate_buffer: true
+        - match:
+            option_1: "{{nlp.match(patterns.option_1)}}"
+            option_2: "{{nlp.match(patterns.option_2)}}"
+            explicit: "{{nlp.match(patterns.explicit_schedule)}}"
+            ambiguous: "{{nlp.match(patterns.ambiguous_schedule)}}"
+        - if: "{{option_1 || explicit}}"
+          then: { transition: "SCHEDULING_ROUTING" }
+        - elif: "{{option_2}}"
+          then: { transition: "INFO_ROUTING" }
+        - elif: "{{ambiguous}}"
+          then:
+            - reply: { template: "confirm_intent" }
+            - transition: "CONFIRM_INTENT"
+        - else:
+            - reply: { template: "invalid_option" }
+            - stay: true
+    
+    CONFIRM_INTENT:
+      description: "Confirma intenção após trigger ambíguo; só segue com 1/2."
+      on_user_message:
+        - match:
+            option_1: "{{nlp.match(patterns.option_1)}}"
+            option_2: "{{nlp.match(patterns.option_2)}}"
+        - if: "{{option_1}}"
+          then: { transition: "SCHEDULING_ROUTING" }
+        - elif: "{{option_2}}"
+          then: { transition: "INFO_ROUTING" }
+        - else:
+            - reply: { template: "invalid_option" }
+            - stay: true
+    
+    SCHEDULING_ROUTING:
+      description: "Envia para o subfluxo de agendamento; antes de confirmar, validar."
+      on_enter:
+        - transition: "VALIDATE_BEFORE_CONFIRM"
+    
+    VALIDATE_BEFORE_CONFIRM:
+      description: "Regra forte: não confirmar se entidade for categoria ou ambígua."
+      on_user_message_or_slots:
+        - detect_entity:
+            # Espera-se que o subfluxo upstream tenha proposto service_id.
+            # Se só houver 'categoria' ou texto vago, cai na clarificação.
+            service_id: "{{slots.service_id}}"
+            category: "{{slots.category}}"
+            raw_query: "{{input.text}}"
+        - if: "{{!service_id || category || nlp.is_ambiguous(raw_query)}}"
+          then:
+            - tool: "catalog.search_top_services"
+              args: { query: "{{category || raw_query}}", limit: 3 }
+              save_as: "top3"
+            - reply: { template: "clarify_service" }
+            - wait_user_choice_map_to_service_id: true
+            - stay: true
+          else:
+            - tool: "trinks.validate_availability"
+              args:
+                service_id: "{{service_id}}"
+                professional_id: "{{slots.professional_id}}"
+                start_iso: "{{slots.start_iso}}"
+              save_as: "validation"
+            - if: "{{!validation.ok}}"
+              then:
+                - reply: { template: "validation_failed" }
+                - tool: "catalog.search_top_services"
+                  args: { query: "{{raw_query}}", limit: 3 }
+                  save_as: "top3"
+                - reply: { template: "clarify_service" }
+                - stay: true
+              else:
+                - transition: "SCHEDULING_CONFIRMED"  # Estado do subfluxo principal
+    
+    INFO_ROUTING:
+      description: "Encaminha para o subfluxo de informações (FAQ/horários, etc.)."
+      on_enter:
+        - route_to_subflow: "INFO_FLOW"
+        - done: true
+    
+    # Estados de subfluxos (placeholders)
+    SCHEDULING_CONFIRMED:
+      description: "Estado terminal - agendamento confirmado"
+      on_enter:
+        - reply: { template: "scheduling_confirmed" }
+        - done: true
+
+  terminal_states:
+    - "SCHEDULING_CONFIRMED"
+    - "INFO_ROUTING"
+
+  routing:
+    webhooks:
+      admin_handoff_toggle:
+        method: "POST"
+        path: "/admin/handoff/:phone"
+        auth: "bearer:{{env.ADMIN_TOKEN}}"
+        effect:
+          - tool: "admin.set_handoff"
+            args: { phone: "{{params.phone}}", enabled: "{{body.enabled}}" }
+
+  metrics:
+    goals:
+      - name: "no_false_agenda_panes"
+        description: "0 panes com 'agenda' fora do menu em 200 conversas de teste"
+      - name: "single_block_after_buffer"
+        description: "Mensagens quebradas em ≤30s resultam em uma única interpretação"
+    
+    counters:
+      - name: "ambiguous_triggers_caught"
+      - name: "handoff_activations"
+      - name: "validation_blocks"
+
+  acceptance_tests:
+    - name: "ambiguous_agenda_requires_confirmation"
+      input: ["agenda", "quero ver agenda", "horarios"]
+      expected:
+        state_sequence: ["MENU_WAITING", "CONFIRM_INTENT"]
+        reply_contains: "Agendar (1) ou Informações (2)"
+    
+    - name: "buffer_concatenation"
+      input_bursts:
+        - at_ms: 0     ; text: "quero"
+        - at_ms: 5000  ; text: "agendar"
+        - at_ms: 12000 ; text: "amanhã"
+      expected:
+        merged_text: "quero agendar amanhã"
+        next_state: "SCHEDULING_ROUTING"
+    
+    - name: "validation_prevents_category_confirmation"
+      slots:
+        category: "cabelo"
+        service_id: null
+      expected:
+        reply_contains: "Antes de confirmar, preciso entender melhor o serviço."
+        next_state: "VALIDATE_BEFORE_CONFIRM"
+
+# Configurações de buffer temporal
+buffer:
+  timeout_ms: 30000  # 30 segundos
+  max_messages: 5    # Máximo de mensagens no buffer
+  redis_key_prefix: "buffer:"
+
+# Configurações de handoff humano
+handoff:
+  redis_key_prefix: "human_override:"
+  default_timeout_hours: 24
+  admin_endpoints:
+    - "/admin/handoff/:phone"
+    - "/admin/handoff/bulk"
+
+# Configurações de validação
+validation:
+  require_service_id: true
+  reject_categories: true
+  ambiguity_threshold: 0.7
+  max_clarification_attempts: 3

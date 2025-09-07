@@ -1,37 +1,52 @@
 import { Router, Request, Response } from 'express';
 import { body, validationResult } from 'express-validator';
 import { createMarlieRouter } from '../../agents/marlie-router';
-import { getMessageBufferService } from '../../services/message-buffer';
+import { getMessageBuffer } from '../../services/message-buffer';
 import { getHumanHandoffService } from '../../services/human-handoff';
 import { getValidationService } from '../../services/validation-service';
 import { getResponseTemplateService } from '../../services/response-templates';
 import { getCatalogService } from '../../services/catalog-service';
 import { getTrinksService } from '../../services/trinks-service';
-import { redis, db } from '../../config/database';
+import { pool } from '../../infra/db';
+import { getRedis } from '../../infra/redis';
 import { logger } from '../../utils/logger';
 import { verifyWhatsAppWebhook } from '../../middleware/whatsapp-auth';
 
 const router = Router();
 
-// Inicializa serviços
-const messageBuffer = getMessageBufferService(redis);
-const handoffService = getHumanHandoffService(redis, db);
-const catalogService = getCatalogService(db);
-const trinksService = getTrinksService();
-const validationService = getValidationService(catalogService, trinksService);
-const templateService = getResponseTemplateService();
+// Inicializa serviços de forma assíncrona
+let marlieAgent: any;
+let messageBuffer: any;
+let handoffService: any;
+let catalogService: any;
+let trinksService: any;
+let validationService: any;
+let templateService: any;
 
-// Cria agente Marlie
-const marlieAgent = createMarlieRouter(
-  redis,
-  db,
-  messageBuffer,
-  handoffService,
-  validationService,
-  templateService,
-  catalogService,
-  trinksService
-);
+async function initializeServices() {
+  const redis = await getRedis();
+  messageBuffer = getMessageBuffer(redis!);
+  handoffService = getHumanHandoffService(redis!, pool);
+  catalogService = getCatalogService(pool);
+  trinksService = getTrinksService(process.env.TRINKS_BASE_URL!, process.env.TRINKS_API_KEY!);
+  validationService = getValidationService(catalogService, trinksService);
+  templateService = getResponseTemplateService();
+
+  // Cria agente Marlie
+  marlieAgent = createMarlieRouter(
+    redis!,
+    pool,
+    messageBuffer,
+    handoffService,
+    validationService,
+    templateService,
+    catalogService,
+    trinksService
+  );
+}
+
+// Inicializa serviços
+initializeServices().catch(console.error);
 
 /**
  * @route GET /whatsapp/webhook

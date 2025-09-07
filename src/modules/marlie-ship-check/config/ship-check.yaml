@@ -1,0 +1,160 @@
+# Trae — Verificação de Entregáveis + Build/Deploy
+version: 1
+
+module:
+  name: "marlie-ship-check"
+  language: "pt-BR"
+  description: "Valida P0.1, P0.2, P0.4, P1.6 (3 dashboards) e P2.7; em seguida compila, publica no GitHub e faz deploy no Railway."
+
+env:
+  timezone: "America/Bahia"
+  BASE_URL: "{{env.BASE_URL}}"              # ex: `https://api.marlie.app`
+  ADMIN_TOKEN: "{{env.ADMIN_TOKEN}}"
+  GRAFANA_URL: "{{env.GRAFANA_URL}}"        # ex: `https://grafana.example.com`
+  GRAFANA_TOKEN: "{{env.GRAFANA_TOKEN}}"
+
+tools:
+  - name: "http.get_json"
+    description: "GET JSON com headers."
+    input_schema:
+      type: object
+      properties:
+        url: { type: string }
+        headers: { type: object }
+      required: [url]
+  - name: "http.post_json"
+    description: "POST JSON com headers."
+    input_schema:
+      type: object
+      properties:
+        url: { type: string }
+        body: { type: object }
+        headers: { type: object }
+      required: [url]
+  - name: "router.inject_mock_message"
+    description: "Injeta mensagem como se fosse do WhatsApp."
+    input_schema:
+      type: object
+      properties:
+        phone: { type: string }
+        text: { type: string }
+      required: [phone, text]
+  - name: "qa.wait"
+    description: "Aguarda N milissegundos."
+    input_schema:
+      type: object
+      properties: { ms: { type: integer } }
+      required: [ms]
+
+tests:
+  suites:
+    - name: "deliverables_checklist"
+      steps:
+        # P0.1 — Menu rígido + confirmação de intenção
+        - action: "router.inject_mock_message"
+          with: { phone: "5573999990000", text: "agenda" }
+        - expect_reply_contains: ["Agendar (1)", "Informações (2)"]
+
+        # P0.2 — Buffer 30s agregando mensagens por phone+window
+        - action: "router.inject_mock_message"
+          with: { phone: "5573999990001", text: "quero" }
+        - action: "qa.wait"
+          with: { ms: 5000 }
+        - action: "router.inject_mock_message"
+          with: { phone: "5573999990001", text: "agendar amanhã" }
+        - expect_state: "SCHEDULING_ROUTING"   # interpretação única após buffer
+
+        # P0.4 — Handoff humano: endpoint + efeito na conversa
+        - action: "http.post_json"
+          with:
+            url: "{{env.BASE_URL}}/admin/handoff/5573999990002"
+            headers: { Authorization: "Bearer {{env.ADMIN_TOKEN}}" }
+            body: { enabled: true }
+        - action: "router.inject_mock_message"
+          with: { phone: "5573999990002", text: "oi" }
+        - expect_reply_contains: ["Atendimento humano ativo"]
+        - action: "http.post_json"
+          with:
+            url: "{{env.BASE_URL}}/admin/handoff/5573999990002"
+            headers: { Authorization: "Bearer {{env.ADMIN_TOKEN}}" }
+            body: { enabled: false }
+
+        # P1.6 — Dashboards Grafana (3 telas)
+        - action: "http.get_json"
+          with:
+            url: "{{env.GRAFANA_URL}}/api/search?type=dash-db&query=Funil%20de%20Agendamento"
+            headers: { Authorization: "Bearer {{env.GRAFANA_TOKEN}}" }
+          save_as: "dash_funnel"
+        - assert: { expr: "{{len(dash_funnel) > 0}}" }
+        - action: "http.get_json"
+          with:
+            url: "{{env.GRAFANA_URL}}/api/search?type=dash-db&query=No-show%20Shield"
+            headers: { Authorization: "Bearer {{env.GRAFANA_TOKEN}}" }
+          save_as: "dash_noshow"
+        - assert: { expr: "{{len(dash_noshow) > 0}}" }
+        - action: "http.get_json"
+          with:
+            url: "{{env.GRAFANA_URL}}/api/search?type=dash-db&query=Upsell"
+            headers: { Authorization: "Bearer {{env.GRAFANA_TOKEN}}" }
+          save_as: "dash_upsell"
+        - assert: { expr: "{{len(dash_upsell) > 0}}" }
+
+        # P2.7 — Job de sincronismo Trinks → servicos_prof (diff=0)
+        - action: "http.post_json"
+          with:
+            url: "{{env.BASE_URL}}/admin/sync/diff"
+            headers: { Authorization: "Bearer {{env.ADMIN_TOKEN}}" }
+            body: { as_of_date: "{{today_local_date(env.timezone)}}" }
+          save_as: "diff"
+        - assert:
+            any_of:
+              - expr: "{{diff.status == 'no_diffs'}}"
+              - expr: "{{(diff.count || 0) == 0}}"
+
+ci_cd:
+  stages:
+    - name: "run_suite_deliverables"
+      run:
+        - 'curl -s -X POST "{{env.BASE_URL}}/admin/qa/run" -H "Authorization: Bearer {{env.ADMIN_TOKEN}}" -H "Content-Type: application/json" -d "{\"suite\":\"deliverables_checklist\"}"
+    - name: "install"
+      run: ["pnpm i || npm i"]
+    - name: "build"
+      run: ["pnpm build || npm run build"]
+    - name: "git_push"
+      run:
+        - 'git add -A'
+        - 'git commit -m "chore: verificar entregáveis & deploy" || echo "nada a commitar"'
+        - 'git push origin main'
+    - name: "deploy_railway"
+      run:
+        - 'railway up || npx -y @railway/cli up'
+
+# Configurações adicionais
+notifications:
+  slack:
+    webhook_url: "{{env.SLACK_WEBHOOK_URL}}"
+    channels:
+      - "#deployments"
+      - "#qa-alerts"
+  email:
+    recipients:
+      - "dev@marlie.app"
+      - "ops@marlie.app"
+
+metrics:
+  collect_performance: true
+  track_deliverables: true
+  export_to_grafana: true
+  retention_days: 30
+
+rollback:
+  enabled: true
+  auto_rollback_on_failure: true
+  max_rollback_attempts: 3
+  rollback_timeout_minutes: 10
+
+security:
+  mask_sensitive_data: true
+  audit_trail: true
+  require_approval_for_prod: true
+  allowed_environments: ["development", "staging", "production"]

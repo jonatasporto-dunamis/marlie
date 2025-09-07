@@ -118,8 +118,8 @@ async function getCachedWithETag<T>(cacheKey: string, etagKey: string): Promise<
     ]);
     
     return {
-      data: cachedData ? JSON.parse(cachedData) : null,
-      etag: cachedETag
+      data: cachedData && typeof cachedData === 'string' ? JSON.parse(cachedData) : null,
+      etag: typeof cachedETag === 'string' ? cachedETag : null
     };
   } catch (error) {
     logger.warn('Failed to get cached data with ETag:', error);
@@ -152,7 +152,7 @@ async function invalidateCache(pattern: string): Promise<void> {
   try {
     const keys = await redis.keys(pattern);
     if (keys.length > 0) {
-      await redis.del(...keys);
+      await redis.del(keys);
       logger.debug(`Invalidated ${keys.length} cache entries matching pattern: ${pattern}`);
     }
   } catch (error) {

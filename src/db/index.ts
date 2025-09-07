@@ -246,7 +246,7 @@ export async function getConversationState(tenantId: string, phone: string): Pro
   if (redis) {
     const raw = await redis.get(key);
     if (raw) {
-      try { return JSON.parse(raw); } catch { /* ignore */ }
+      try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { /* ignore */ }
     }
   }
   {
@@ -657,7 +657,7 @@ export async function getServicosSuggestions(
     try {
       const cached = await redis.get(cacheKey);
       if (cached) {
-        const parsed = JSON.parse(cached);
+        const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached;
         if (Array.isArray(parsed)) return parsed;
       }
     } catch {}
@@ -797,7 +797,7 @@ export async function getIdempotencyResult<T = any>(key: string): Promise<T | nu
   if (!redis || !key) return null;
   try {
     const raw = await redis.get(`idemp:booking:${key}:result`);
-    return raw ? (JSON.parse(raw) as T) : null;
+    return raw && typeof raw === 'string' ? (JSON.parse(raw) as T) : null;
   } catch {
     return null;
   }

@@ -1,8 +1,8 @@
-# Agente Marlie - Roteador WhatsApp
+# Agente Syncbelle - Roteador WhatsApp
 
 ## Visão Geral
 
-O **Agente Marlie** é um sistema de atendimento automatizado para WhatsApp Business API, projetado para eliminar falsos positivos de agendamento e fornecer um atendimento determinístico e confiável.
+O **Agente Syncbelle** é um sistema de atendimento automatizado para WhatsApp Business API, projetado para eliminar falsos positivos de agendamento e fornecer um atendimento determinístico e confiável.
 
 ### Características Principais
 
@@ -16,7 +16,7 @@ O **Agente Marlie** é um sistema de atendimento automatizado para WhatsApp Busi
 
 ### Componentes Principais
 
-1. **Marlie Router** (`src/agents/marlie-router.ts`)
+1. **Syncbelle Router** (`src/agents/syncbelle-router.ts`)
    - Agente principal que coordena todo o fluxo
    - Gerencia estados de conversação
    - Integra todos os serviços
@@ -153,48 +153,48 @@ POST /api/whatsapp/cleanup
 #### Fluxo Normal - Agendamento
 ```
 Usuário: Oi
-Marlie: Olá, João! Sou a Marliê 🌸.
+Syncbelle: Olá, João! Sou a Syncbelle 🌸.
         Como posso ajudar hoje?
         1) Agendar atendimento
         2) Informações
         Responda com **1** ou **2**.
 
 Usuário: 1
-Marlie: Perfeito! Vou ajudar você a agendar um atendimento.
+Syncbelle: Perfeito! Vou ajudar você a agendar um atendimento.
         Qual serviço você gostaria?
 
 Usuário: Corte feminino
-Marlie: Encontrei o serviço:
+Syncbelle: Encontrei o serviço:
         ✅ Corte Feminino — 60min — R$ 80,00
         Confirma este serviço?
 
 Usuário: Sim
-Marlie: Ótimo! Agendamento confirmado.
+Syncbelle: Ótimo! Agendamento confirmado.
         Em breve você receberá os detalhes.
 ```
 
 #### Fluxo com Clarificação
 ```
 Usuário: Quero fazer as unhas
-Marlie: Antes de confirmar, preciso entender melhor o serviço.
+Syncbelle: Antes de confirmar, preciso entender melhor o serviço.
         Você quis dizer algum destes? Responda com o número:
         1) Manicure — 45min — R$ 35,00
         2) Pedicure — 60min — R$ 40,00
 
 Usuário: 1
-Marlie: Perfeito! Manicure selecionada.
+Syncbelle: Perfeito! Manicure selecionada.
         Confirma este serviço?
 ```
 
 #### Handoff Humano
 ```
 Usuário: Preciso falar com alguém
-Marlie: Entendi! Ativando atendimento humano.
+Syncbelle: Entendi! Ativando atendimento humano.
         👩‍💼 Em breve um de nossos atendentes
         entrará em contato com você.
 
 # Qualquer mensagem posterior:
-Marlie: Atendimento humano ativo. 👩‍💼 Aguarde, por favor.
+Syncbelle: Atendimento humano ativo. 👩‍💼 Aguarde, por favor.
 ```
 
 ## Padrões NLP

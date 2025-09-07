@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from '@jest/globals';
-import { createMarlieRouter } from '../../agents/marlie-router';
-import { getMessageBufferService } from '../../services/message-buffer';
-import { getHumanHandoffService } from '../../services/human-handoff';
-import { getValidationService } from '../../services/validation-service';
-import { getResponseTemplateService } from '../../services/response-templates';
-import { getCatalogService } from '../../services/catalog-service';
-import { getTrinksService } from '../../services/trinks-service';
+import { createSyncbelleRouter } from '../../agents/syncbelle-router';
+import { MessageBuffer } from '../../services/message-buffer';
+import { HumanHandoffService } from '../../services/human-handoff';
+import { ValidationService } from '../../services/validation-service';
+import { ResponseTemplateService } from '../../services/response-templates';
+import { CatalogService } from '../../services/catalog-service';
+import { TrinksService } from '../../services/trinks-service';
 import Redis from 'ioredis';
 import { Pool } from 'pg';
 
@@ -140,8 +140,8 @@ class MockTrinksService {
   }
 }
 
-describe('Marlie Router Integration Tests', () => {
-  let marlieAgent: any;
+describe('Syncbelle Router Integration Tests', () => {
+  let syncbelleAgent: any;
   let mockRedis: MockRedis;
   let mockDb: MockDatabase;
   let messageBuffer: any;
@@ -158,14 +158,14 @@ describe('Marlie Router Integration Tests', () => {
     trinksService = new MockTrinksService();
 
     // Inicializa serviços
-    messageBuffer = getMessageBufferService(mockRedis as any);
-    handoffService = getHumanHandoffService(mockRedis as any, mockDb as any);
-    catalogService = getCatalogService(mockDb as any);
-    validationService = getValidationService(catalogService, trinksService as any);
-    templateService = getResponseTemplateService();
+    messageBuffer = new MessageBuffer(mockRedis as any);
+    handoffService = new HumanHandoffService(mockRedis as any, mockDb as any);
+    catalogService = new CatalogService(mockDb as any);
+    validationService = new ValidationService(catalogService, trinksService as any);
+    templateService = new ResponseTemplateService();
 
     // Cria agente
-    marlieAgent = createMarlieRouter(
+    syncbelleAgent = createSyncbelleRouter(
       mockRedis as any,
       mockDb as any,
       messageBuffer,
@@ -184,7 +184,7 @@ describe('Marlie Router Integration Tests', () => {
 
   describe('Menu Determinístico - Primeiro Turno', () => {
     it('deve mostrar menu de boas-vindas para nova conversa', async () => {
-      const response = await marlieAgent.processMessage(
+      const response = await syncbelleAgent.processMessage(
         '+5511999999999',
         'Oi',
         'test',

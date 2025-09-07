@@ -78,7 +78,7 @@ class ConfigService {
     const key = this.getMasterKey();
     const iv = crypto.randomBytes(this.ivLength);
     
-    const cipher = crypto.createCipher(this.algorithm, key);
+    const cipher = crypto.createCipheriv(this.algorithm, key, iv);
     cipher.setAAD(Buffer.from('config-service')); // Additional Authenticated Data
     
     let encrypted = cipher.update(plaintext, 'utf8', 'hex');
@@ -102,7 +102,7 @@ class ConfigService {
     const iv = Buffer.from(encryptedConfig.iv, 'hex');
     const authTag = Buffer.from(encryptedConfig.authTag, 'hex');
     
-    const decipher = crypto.createDecipher(encryptedConfig.algorithm, key);
+    const decipher = crypto.createDecipheriv(encryptedConfig.algorithm, key, iv) as any;
     decipher.setAAD(Buffer.from('config-service'));
     decipher.setAuthTag(authTag);
     
@@ -172,7 +172,7 @@ class ConfigService {
    */
   private async getFromRedisCache(cacheKey: string): Promise<ConfigValue | null> {
     try {
-      const redis = getRedis();
+      const redis = await getRedis();
       if (!redis) {
         return null;
       }
@@ -182,7 +182,7 @@ class ConfigService {
         return null;
       }
       
-      return JSON.parse(cached);
+      return typeof cached === 'string' ? JSON.parse(cached) : null;
     } catch (error) {
       logger.warn('Error reading from Redis cache:', error);
       return null;
@@ -194,12 +194,12 @@ class ConfigService {
    */
   private async setInRedisCache(cacheKey: string, value: ConfigValue): Promise<void> {
     try {
-      const redis = getRedis();
+      const redis = await getRedis();
       if (!redis) {
         return;
       }
       
-      await redis.setex(cacheKey, this.redisCacheTTL, JSON.stringify(value));
+      await redis.setEx(cacheKey, this.redisCacheTTL, JSON.stringify(value));
     } catch (error) {
       logger.warn('Error writing to Redis cache:', error);
     }
@@ -216,7 +216,7 @@ class ConfigService {
     
     // Remover do cache Redis
     try {
-      const redis = getRedis();
+      const redis = await getRedis();
       if (redis) {
         await redis.del(cacheKey);
       }
@@ -512,7 +512,7 @@ class ConfigService {
       if (redis) {
         const keys = await redis.keys('config:*');
         if (keys.length > 0) {
-          await redis.del(...keys);
+          await redis.del([...keys]);
         }
       }
     } catch (error) {

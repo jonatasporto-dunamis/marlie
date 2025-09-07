@@ -1,13 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { adminAuth, requireAdminToken } from '../middleware/tokenAuth';
 import { adminRateLimit } from '../middleware/rateLimiting';
-import { ConfigService } from '../services/config';
+import { configService } from '../services/config';
 import { getCurrentTenantId } from '../middleware/tenant';
 import logger from '../utils/logger';
 import { maskPIIInObject } from '../middleware/piiMasking';
+import { shipCheckRoutes } from '../modules/marlie-ship-check/routes';
 
 const router = Router();
-const configService = new ConfigService();
 
 /**
  * Interface para requisições de configuração
@@ -41,11 +41,11 @@ router.get('/health', async (req: Request, res: Response) => {
     
     // Verificar se o ConfigService está funcionando
     const testKey = '__health_check__';
-    await configService.set(tenantId, testKey, 'ok', 'Health check test');
+    await configService.set(tenantId, testKey, 'ok', 'setting', 'Health check test');
     const testValue = await configService.get(tenantId, testKey);
     await configService.delete(tenantId, testKey);
     
-    const isHealthy = testValue === 'ok';
+    const isHealthy = testValue?.value === 'ok';
     
     logger.info('Admin health check', {
       tenantId,
@@ -80,13 +80,11 @@ router.get('/configs', async (req: Request, res: Response) => {
     const tenantId = getCurrentTenantId(req) || 'default';
     const { category, includeValues } = req.query;
     
-    const configs = await configService.list(tenantId, category as string);
+    const configs = await configService.list(tenantId);
     
-    // Mascarar valores sensíveis se não explicitamente solicitado
-    const shouldIncludeValues = includeValues === 'true';
+    // O método list não retorna valores por segurança
     const maskedConfigs = configs.map(config => ({
       ...config,
-      value: shouldIncludeValues ? config.value : '[REDACTED]',
       encrypted: true // Indicar que o valor está criptografado
     }));
     
@@ -94,7 +92,7 @@ router.get('/configs', async (req: Request, res: Response) => {
       tenantId,
       count: configs.length,
       category: category || 'all',
-      includeValues: shouldIncludeValues,
+      includeValues: includeValues === 'true',
       ip: req.ip
     });
     
@@ -134,7 +132,7 @@ router.get('/configs/:key', async (req: Request, res: Response) => {
       });
     }
     
-    const config = await configService.getWithMetadata(tenantId, key);
+    const config = await configService.get(tenantId, key);
     
     if (!config) {
       return res.status(404).json({
@@ -196,7 +194,7 @@ router.post('/configs', async (req: Request, res: Response) => {
       });
     }
     
-    await configService.set(tenantId, key, value, description, category);
+    await configService.set(tenantId, key, value, 'credential', description);
     
     logger.info('Admin config created', {
       tenantId,
@@ -252,7 +250,7 @@ router.put('/configs/:key', async (req: Request, res: Response) => {
       });
     }
     
-    await configService.set(tenantId, key, value, description);
+    await configService.set(tenantId, key, value, 'setting' as const, description);
     
     logger.info('Admin config updated', {
       tenantId,
@@ -358,7 +356,7 @@ router.post('/configs/:key/rotate', async (req: Request, res: Response) => {
       });
     }
     
-    const newValue = await configService.rotate(tenantId, key, description);
+    await configService.rotate(tenantId, key);
     
     logger.info('Admin config rotated', {
       tenantId,
@@ -373,8 +371,7 @@ router.post('/configs/:key/rotate', async (req: Request, res: Response) => {
       data: {
         key,
         tenant: tenantId,
-        rotated: true,
-        newValue: newValue // Retornar o novo valor para o admin
+        rotated: true
       }
     });
     
@@ -511,5 +508,8 @@ async function validateOpenAIConfig(configs: any): Promise<boolean> {
   const required = ['api_key'];
   return required.every(key => configs[key]);
 }
+
+// Integrar rotas do ship-check
+router.use('/ship-check', shipCheckRoutes);
 
 export default router;
